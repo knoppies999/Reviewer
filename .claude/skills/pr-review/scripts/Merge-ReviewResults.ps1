@@ -167,6 +167,7 @@ function ConvertTo-Finding {
     $fnd.source = $Source
     $fnd.verification = 'not-checked'
     $fnd.verificationReason = ''
+    $fnd.duplicates = New-Object System.Collections.Generic.List[object]
     return $fnd
 }
 
@@ -216,8 +217,9 @@ foreach ($extra in $resultsByFile.Keys) {
     if (-not $manifestPaths.ContainsKey($extra)) { Write-Warning "file-results.jsonl contains a result for '$extra', which is not in the manifest; ignored." }
 }
 
-# verifications
+# verifications, including duplicates the integration pass declared with duplicateOf
 $verdicts = @{}
+$duplicateOf = @{}
 if ($integrationRan) {
     foreach ($v in @(Get-Prop $integration 'verifications' @())) {
         $id = Get-Text $v 'id' ''
@@ -231,6 +233,8 @@ foreach ($fnd in $all) {
             if ($vd -notin @('confirmed', 'refuted', 'unverified')) { $vd = 'unverified' }
             $fnd.verification = $vd
             $fnd.verificationReason = Get-Text $verdicts[$fnd.id] 'reason' ''
+            $target = Get-Text $verdicts[$fnd.id] 'duplicateOf' ''
+            if ($target -and $target -ne $fnd.id) { $duplicateOf[$fnd.id] = $target }
         }
         else {
             $fnd.verification = 'unverified'
@@ -259,25 +263,116 @@ foreach ($fnd in $all) {
     if ($fnd.verification -eq 'refuted') { $refuted.Add($fnd); continue }
     $candidates.Add($fnd)
 }
-$kept = New-Object System.Collections.Generic.List[object]
+$severityRank = @{ 'blocking' = 0; 'should-fix' = 1; 'nit' = 2; 'question' = 3 }
+$verificationRank = @{ 'confirmed' = 0; 'unverified' = 1; 'not-checked' = 2 }
+$titleSimilarityThreshold = 0.5
+$stopWords = New-Object 'System.Collections.Generic.HashSet[string]'
+foreach ($w in @('the', 'and', 'for', 'are', 'its', 'this', 'that', 'with', 'without', 'not', 'can', 'may', 'from', 'into',
+        'than', 'then', 'when', 'which', 'any', 'all', 'every', 'never', 'only', 'also', 'does', 'has', 'have', 'was',
+        'were', 'will', 'would', 'could', 'should', 'but', 'via', 'per', 'out', 'one', 'two', 'new')) { [void]$stopWords.Add($w) }
+
+function Get-TitleTokens {
+    # Lower-cased words of 3+ letters, stop words removed, common suffixes stripped.
+    param([string]$Text)
+    $set = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($raw in ($Text.ToLowerInvariant() -split '[^a-z0-9]+')) {
+        if ($raw.Length -lt 3 -or $stopWords.Contains($raw)) { continue }
+        $word = $raw
+        foreach ($suffix in @('ations', 'ation', 'ings', 'ing', 'ions', 'ion', 'ed', 'es', 's')) {
+            if ($word.EndsWith($suffix) -and ($word.Length - $suffix.Length) -ge 4) { $word = $word.Substring(0, $word.Length - $suffix.Length); break }
+        }
+        [void]$set.Add($word)
+    }
+    return , $set
+}
+
+function Get-TitleSimilarity {
+    # Jaccard similarity of the two titles' token sets, 0 to 1.
+    param([string]$A, [string]$B)
+    $ta = Get-TitleTokens -Text $A
+    $tb = Get-TitleTokens -Text $B
+    if ($ta.Count -eq 0 -or $tb.Count -eq 0) { return 0.0 }
+    $inter = 0
+    foreach ($t in $ta) { if ($tb.Contains($t)) { $inter++ } }
+    return ([double]$inter / [double]($ta.Count + $tb.Count - $inter))
+}
+
+function Resolve-DuplicateRoot {
+    # Follows duplicateOf links to the finding that should absorb $Id. $null when $Id stands alone.
+    param([string]$Id)
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+    $current = $Id
+    while ($duplicateOf.ContainsKey($current) -and $byId.ContainsKey($duplicateOf[$current])) {
+        if (-not $seen.Add($current)) { return $null }
+        $current = $duplicateOf[$current]
+    }
+    if ($current -eq $Id) { return $null }
+    return $current
+}
+
+function Add-Duplicate {
+    # Folds $Dup into $Root, keeping a reference to it and the stronger severity, confidence and verification.
+    param($Root, $Dup)
+    $entry = [ordered]@{}
+    $entry.id = $Dup.id
+    $entry.file = $Dup.file
+    $entry.line = $Dup.line
+    $entry.endLine = $Dup.endLine
+    $entry.severity = $Dup.severity
+    $entry.title = $Dup.title
+    $entry.source = $Dup.source
+    $Root.duplicates.Add($entry)
+    foreach ($inner in $Dup.duplicates) { $Root.duplicates.Add($inner) }
+    if ($severityRank[$Dup.severity] -lt $severityRank[$Root.severity]) { $Root.severity = $Dup.severity }
+    if ($Dup.confidence -gt $Root.confidence) { $Root.confidence = $Dup.confidence }
+    if ($verificationRank.ContainsKey($Dup.verification) -and $verificationRank.ContainsKey($Root.verification)) {
+        if ($verificationRank[$Dup.verification] -lt $verificationRank[$Root.verification]) {
+            $Root.verification = $Dup.verification
+            $Root.verificationReason = $Dup.verificationReason
+        }
+    }
+}
+
 $mergedDuplicates = 0
-foreach ($fnd in @($candidates | Sort-Object -Property @{ Expression = { $_.confidence }; Descending = $true })) {
+$byId = @{}
+foreach ($fnd in $candidates) { $byId[$fnd.id] = $fnd }
+
+# Pass 1: duplicates the integration pass declared. This is the only way findings from
+# different files are merged, because only a whole-PR view can tell they are one defect.
+$foldedIds = New-Object 'System.Collections.Generic.HashSet[string]'
+foreach ($fnd in $candidates) {
+    if (-not $duplicateOf.ContainsKey($fnd.id)) { continue }
+    $rootId = Resolve-DuplicateRoot -Id $fnd.id
+    if (-not $rootId) { continue }
+    Add-Duplicate -Root $byId[$rootId] -Dup $fnd
+    [void]$foldedIds.Add($fnd.id)
+    $mergedDuplicates++
+}
+
+# Pass 2: a conservative safety net for undeclared duplicates. Same file, same category,
+# overlapping lines AND similar titles. Two different defects on one line stay separate;
+# a missed merge only shows a duplicate, an over-merge would hide a defect.
+$kept = New-Object System.Collections.Generic.List[object]
+$remaining = @($candidates | Where-Object { -not $foldedIds.Contains($_.id) })
+foreach ($fnd in @($remaining | Sort-Object -Property @{ Expression = { $severityRank[$_.severity] } }, @{ Expression = { $_.confidence }; Descending = $true })) {
     $dup = $null
     foreach ($k in $kept) {
         if ($k.file -ne $fnd.file -or $k.category -ne $fnd.category) { continue }
         if ([object]::ReferenceEquals($k.line, $null) -or [object]::ReferenceEquals($fnd.line, $null)) { continue }
         $startMax = [Math]::Max([int]$k.line, [int]$fnd.line)
         $endMin = [Math]::Min([int]$k.endLine, [int]$fnd.endLine)
-        if ($startMax -le $endMin) { $dup = $k; break }
+        if ($startMax -gt $endMin) { continue }
+        if ((Get-TitleSimilarity -A $k.title -B $fnd.title) -lt $titleSimilarityThreshold) { continue }
+        $dup = $k
+        break
     }
     if (-not [object]::ReferenceEquals($dup, $null)) {
+        Add-Duplicate -Root $dup -Dup $fnd
         $mergedDuplicates++
-        if ($dup.title -ne $fnd.title) { $dup.detail = ($dup.detail + ' Also reported: ' + $fnd.title + '.').Trim() }
         continue
     }
     $kept.Add($fnd)
 }
-$severityRank = @{ 'blocking' = 0; 'should-fix' = 1; 'nit' = 2; 'question' = 3 }
 $final = @($kept | Sort-Object -Property @{ Expression = { $severityRank[$_.severity] } }, @{ Expression = { $_.confidence }; Descending = $true }, @{ Expression = { [int]($_.id -replace '^F', '') } })
 
 # verdict, counts
@@ -404,9 +499,15 @@ function Add-Section {
     [void]$sb.AppendLine("## $Heading ($($items.Count))")
     if ($items.Count -eq 0) { [void]$sb.AppendLine(); [void]$sb.AppendLine('None.'); return }
     foreach ($f in $items) {
+        $alsoReported = ''
+        if ($f.duplicates.Count -gt 0) {
+            $refs = @($f.duplicates | ForEach-Object { "$($_.id) at $(Format-Location $_)" })
+            $alsoReported = "Also reported as $($refs -join ', ')."
+        }
         if ($AsBullets) {
             $line = "- $(Format-Location $f) $dot $($f.title)."
             if ($f.detail -and $f.detail -ne $f.title) { $line += " $(Format-OneLine $f.detail)" }
+            if ($alsoReported) { $line += " $alsoReported" }
             [void]$sb.AppendLine($line)
         }
         else {
@@ -416,6 +517,7 @@ function Add-Section {
             if ($f.detail) { [void]$sb.AppendLine(); [void]$sb.AppendLine($f.detail) }
             if ($f.verificationReason -and $f.verification -ne 'not-checked') { [void]$sb.AppendLine(); [void]$sb.AppendLine("_Verification ($($f.verification)): $($f.verificationReason)_") }
             if ($f.suggestion) { [void]$sb.AppendLine(); [void]$sb.AppendLine("**Suggestion:** $($f.suggestion)") }
+            if ($alsoReported) { [void]$sb.AppendLine(); [void]$sb.AppendLine("_$($alsoReported)_") }
         }
     }
 }

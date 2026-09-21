@@ -56,7 +56,8 @@ Ids are assigned in a fixed order so that the integration pass and the merge scr
 {
   "verifications": [
     { "id": "F1", "verdict": "confirmed", "reason": "ChargeAsync has no idempotency parameter and the provider SDK documents timeouts as ambiguous." },
-    { "id": "F3", "verdict": "refuted", "reason": "The null case is guarded in OrderController.Cancel at line 41 before this method is reachable." }
+    { "id": "F3", "verdict": "refuted", "reason": "The null case is guarded in OrderController.Cancel at line 41 before this method is reachable." },
+    { "id": "F5", "verdict": "confirmed", "reason": "Same defect as F1, seen from the gateway that OrderService calls.", "duplicateOf": "F1" }
   ],
   "findings": [
     {
@@ -81,7 +82,11 @@ Ids are assigned in a fixed order so that the integration pass and the merge scr
 
 1. Findings below `minConfidence` are dropped.
 2. Verifications are applied to `blocking` and `should-fix` findings: `refuted` ones move to the `refuted` array and do not count; `confirmed` stay; anything not addressed, or everything when the integration pass did not run, becomes `unverified`. Nits and questions stay `not-checked`.
-3. Duplicates (same file, same category, overlapping line ranges) are merged, keeping the higher confidence.
+3. Duplicates are folded into one finding, in two passes:
+   - **Declared.** A verification with `duplicateOf` folds that finding into the target, following chains and ignoring cycles and targets that did not survive steps 1 and 2. This is the only way findings in different files are merged.
+   - **Undeclared.** As a safety net, two findings are also folded when they share file and category, their line ranges overlap, **and** their titles are similar (Jaccard similarity of 0.5 or more on title words). Two different defects on one line stay separate.
+
+   The kept finding takes the more severe severity, the higher confidence and the stronger verification of the group, and lists every folded finding under `duplicates` with its id, file, lines, severity, title and source. Nothing is discarded.
 4. Integration findings are appended with `source: "integration"`.
 5. Verdict: `request-changes` if any counted `blocking` finding remains (unverified ones count), else `approve-with-comments` if any `should-fix`, else `approve`. When no reviewable file produced a result the verdict is `incomplete`; whenever any reviewable file failed, `incomplete: true` is set alongside the verdict.
 6. Coverage lists every manifest file as reviewed, skipped (with reason), deleted, or failed.
@@ -120,7 +125,10 @@ Ids are assigned in a fixed order so that the integration pass and the merge scr
       "confidence": 0.85,
       "source": "file-review",
       "verification": "confirmed",
-      "verificationReason": "…"
+      "verificationReason": "…",
+      "duplicates": [
+        { "id": "F5", "file": "src/Payments/PaymentGateway.cs", "line": 40, "endLine": 44, "severity": "blocking", "title": "Capture is retried without an idempotency key", "source": "file-review" }
+      ]
     }
   ],
   "refuted": [],
@@ -152,6 +160,8 @@ The gate script counts a finding when its severity is `blocking` and its verific
 ### F1 · `src/Orders/OrderService.cs:88-94` · bug · confidence 0.85 · confirmed
 <detail>
 **Suggestion:** <suggestion>
+
+_Also reported as F5 at `src/Payments/PaymentGateway.cs:40-44`._
 
 ## Should fix (<n>)
 

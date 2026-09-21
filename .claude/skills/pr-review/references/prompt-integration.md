@@ -29,4 +29,4 @@ Full diff: {{fullDiff}}
 The integration checklist is the "Integration" section of {{skillRoot}}/references/checklist-general.md.
 
 ## Output
-Return exactly one ```json block using the integration result schema (verifications[], findings[], assessment, verifyCommands[]) described in {{skillRoot}}/references/report-format.md. Include one verification entry for every id listed above. Do not write or modify any files.
+Return exactly one ```json block using the integration result schema (verifications[], findings[], assessment, verifyCommands[]) described in {{skillRoot}}/references/report-format.md. Include one verification entry for every id listed above, and set duplicateOf on an entry when it describes the same defect as another listed id. Do not write or modify any files.

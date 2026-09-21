@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-09-21
+
+### Fixed
+
+- **Over-merging.** Two different defects on the same line and category were folded into one finding, and the second one's detail and suggestion were lost. The same-file safety net now also requires similar titles before folding, and a folded finding is kept under `duplicates` instead of being reduced to a mention.
+- **Under-merging.** The same defect reported from two files, typically a controller and the service it calls, stayed as two findings and inflated the blocking count. The integration pass now declares duplicates with `duplicateOf`, and the merge folds them into one finding that keeps both locations. The report and the inline pull request comments show "Also reported as".
+- The driver read its reference files through Windows-style paths, which would fail on the Linux agents that the pipeline template uses by default.
+
+### Changed
+
+- Findings in `findings.json` carry a `duplicates` array, and verifications in `integration-result.json` accept `duplicateOf`. Both are additive, so `schemaVersion` stays 1.
+- A folded group takes the most severe severity, the highest confidence and the strongest verification among its members.
+
 ## [0.1.0] - 2026-09-21
 
 First public release.
@@ -28,4 +41,5 @@ First public release.
 - Not yet exercised against a live service: a Copilot subscription, a signed-in Claude Code CLI, or an Azure DevOps organisation.
 - The scripts are deliberately ASCII-only, because Windows PowerShell 5.1 reads a BOM-less file as ANSI and a stray non-ASCII character changes how it parses.
 
-[0.1.0]: https://github.com/knoppies999/Reviewer/releases/tag/v0.1.0
+[0.2.0]: https://github.com/knoppies999/Reviewer/compare/d0d20f6...main
+[0.1.0]: https://github.com/knoppies999/Reviewer/commit/d0d20f6

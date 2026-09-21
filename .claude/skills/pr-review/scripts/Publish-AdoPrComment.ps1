@@ -244,6 +244,11 @@ if ($InlineComments -and $null -ne $findings) {
         $suggestion = [string](Get-Prop $f 'suggestion' '')
         $body = "$marker`n**$severity $([char]0x00B7) $(Get-Prop $f 'category' '-') $([char]0x00B7) confidence $(Get-Prop $f 'confidence' '-') $([char]0x00B7) $(Get-Prop $f 'verification' 'not-checked')**`n`n**$title**`n`n$(Get-Prop $f 'detail' '')"
         if ($suggestion) { $body += "`n`n**Suggestion:** $suggestion" }
+        $dups = @(Get-Prop $f 'duplicates' @())
+        if ($dups.Count -gt 0) {
+            $refs = @($dups | ForEach-Object { "$(Get-Prop $_ 'id' '?') at ``$(Get-Prop $_ 'file' '?'):$(Get-Prop $_ 'line' '?')``" })
+            $body += "`n`nAlso reported as $($refs -join ', ')."
+        }
 
         $thread = @{
             comments      = @(@{ parentCommentId = 0; content = $body; commentType = 1 })

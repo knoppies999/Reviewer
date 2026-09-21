@@ -170,10 +170,10 @@ Write-Utf8File -Path $resultsPath -Content ''
 
 # ---------------------------------------------------------------- prompts
 
-$fileTemplate = Get-Content -LiteralPath (Join-Path $skillRoot 'references\prompt-file-review.md') -Raw
-$integrationTemplate = Get-Content -LiteralPath (Join-Path $skillRoot 'references\prompt-integration.md') -Raw
-$fileInstructions = Get-Content -LiteralPath (Join-Path $skillRoot 'references\file-reviewer.md') -Raw
-$integrationInstructions = Get-Content -LiteralPath (Join-Path $skillRoot 'references\integration-reviewer.md') -Raw
+$fileTemplate = Get-Content -LiteralPath (Join-Path $skillRoot 'references/prompt-file-review.md') -Raw
+$integrationTemplate = Get-Content -LiteralPath (Join-Path $skillRoot 'references/prompt-integration.md') -Raw
+$fileInstructions = Get-Content -LiteralPath (Join-Path $skillRoot 'references/file-reviewer.md') -Raw
+$integrationInstructions = Get-Content -LiteralPath (Join-Path $skillRoot 'references/integration-reviewer.md') -Raw
 
 $pr = Get-Prop $manifest 'pr' $null
 $title = [string](Get-Prop $pr 'title' '')

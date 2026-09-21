@@ -193,6 +193,8 @@ Add `-InlineComments` to also open one thread per blocking finding, anchored to 
 
 **Confidence** is the reviewer's own estimate that a competent reviewer with full context would agree. It is independent of severity: a blocking finding at 0.6 means "if I am right, this must not ship". Findings below `minConfidence` are dropped before the report is written.
 
+**Also reported as** under a finding lists the same defect reported from another place, typically where a bad value enters and where it does damage. Look at both locations, but count it once. The counts and the gate already do.
+
 **Coverage** lists every file as reviewed, skipped with a reason, deleted, or failed. If a file you care about is missing from the review, this is where it says why.
 
 The vocabulary is defined in [severity-guide.md](../.claude/skills/pr-review/references/severity-guide.md).

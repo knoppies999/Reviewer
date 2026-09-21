@@ -112,7 +112,13 @@ They should be `severity: question`, `category: pre-existing`. If they are arriv
 
 ### The same problem is reported twice
 
-The merge de-duplicates findings in the same file and category with overlapping line ranges. Two reports of one problem with different categories survive on purpose, because they may be genuinely different angles.
+The merge folds duplicates two ways. The integration pass marks findings that describe the same defect with `duplicateOf`; that is how a controller finding and a service finding for one bug become one entry, with the second location listed under "Also reported as". Separately, findings in the same file and category are folded when their lines overlap and their titles are similar.
+
+A duplicate can survive when the integration pass did not run or did not recognise the pair. That is deliberate: the merge would rather show a duplicate than fold two different defects together and lose one. Two findings on one line with different subjects, such as a lookup that throws and a culture-sensitive comparison on that same line, stay separate on purpose.
+
+### A finding seems to have disappeared
+
+Check three places in `findings.json`: the `duplicates` array of the other findings, where a folded finding keeps its id, file, lines and title; the `refuted` array, with the integration pass's reason; and `droppedLowConfidence`, which counts findings under `minConfidence`. Nothing is removed any other way.
 
 ---
 

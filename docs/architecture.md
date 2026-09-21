@@ -71,7 +71,9 @@ Responses are parsed by `Get-JsonBlock`, which tries a fenced `json` block, any 
 
 ### Merge-ReviewResults.ps1
 
-Reads the manifest, `file-results.jsonl` and `integration-result.json`, and applies the rules in `references/report-format.md`: drop below the confidence threshold, apply verifications, move refuted findings to an appendix, de-duplicate overlapping findings in the same file and category, append integration findings, decide the verdict, build coverage.
+Reads the manifest, `file-results.jsonl` and `integration-result.json`, and applies the rules in `references/report-format.md`: apply verifications, append integration findings, drop below the confidence threshold, move refuted findings to an appendix, fold duplicates, decide the verdict, build coverage.
+
+Duplicates are folded in two passes. First, the integration pass declares them with `duplicateOf`, because only a whole-PR view can tell that a finding in a controller and a finding in the service it calls are one defect. Then a conservative safety net folds findings in the same file and category whose lines overlap **and** whose titles are similar. Title similarity is required because two different defects often share a line: an early version folded on overlap alone and silently lost a real finding. A folded finding keeps every location under `duplicates`, so the report can say "Also reported as" and nothing is discarded.
 
 Finding ids follow a fixed rule so that the integration pass and the merge agree without coordinating: walk the manifest files in order, and each file's findings in order, numbering `F1`, `F2`, and so on. Integration findings continue the sequence.
 
@@ -105,9 +107,11 @@ Defined once in [`references/report-format.md`](../.claude/skills/pr-review/refe
 
 **Refuted findings are kept, not deleted.** They go into a collapsed appendix with the reason. That is how you audit whether the integration pass is refuting things it should not.
 
+**The merge would rather show a duplicate than lose a defect.** A missed merge costs the reader a few seconds; an over-merge hides a problem entirely. So cross-file duplicates are only folded when the integration pass declares them, and the same-file safety net needs both overlapping lines and similar titles.
+
 **The scripts are ASCII-only.** Windows PowerShell 5.1 reads a BOM-less file as ANSI, so a UTF-8 em dash inside a double-quoted string becomes three bytes that break the parse. Typography in the report comes from `[char]` codes. This is enforced in `.editorconfig` and worth preserving.
 
-**Null checks in helpers use `[object]::ReferenceEquals`.** PowerShell 7's comparison binder was observed throwing `Argument types do not match` from a helper that had been called with many different value types, inside nested hashtable literals. Static reference comparison sidesteps the dynamic binder entirely.
+**Null checks in helpers use `[object]::ReferenceEquals`.** PowerShell 7's comparison binder was observed throwing `Argument types do not match` from a helper that had been called with many different value types, inside nested hashtable literals. Static reference comparison sidesteps the dynamic binder entirely. It happened a second time with `@()` inside a hashtable literal, so every script builds hashtables by assigning precomputed values.
 
 ## Extending it
 
