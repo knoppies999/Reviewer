@@ -45,30 +45,28 @@ Full details in [docs/installation.md](docs/installation.md) and [docs/usage.md]
 
 ## What you get
 
-A report that leads with a verdict and separates what must be fixed from what merely could be:
+A report that leads with a verdict and separates what must be fixed from what merely could be. An example, trimmed to one finding:
 
-```markdown
-# PR review: Add retries to payment capture
-
-**Verdict:** Request changes · **Base:** `develop` ← **Head:** `feature/payment-retries` · 7 files reviewed, 2 skipped, 1 deleted
-
-The PR adds retries to payment capture and returns the cancelled order from CancelOrder.
-The retry is unsafe without idempotency, and the API contract change is not mirrored in the front end.
-
-## Blocking (1)
-
-### F1 · `src/Orders/OrderService.cs:88-94` · bug · confidence 0.85 · confirmed
-**Retry loop can charge the card twice on timeout**
-
-A timeout after the provider accepted the charge is retried without an idempotency key,
-so a slow provider double-charges. The catch at line 90 treats TaskCanceledException
-like a transport failure.
-
-_Verification (confirmed): ChargeAsync has no idempotency parameter and the provider SDK
-documents timeouts as ambiguous._
-
-**Suggestion:** Pass the order id as the idempotency key to _payments.ChargeAsync.
-```
+> ### PR review: Add retries to payment capture
+>
+> **Verdict:** Request changes · **Base:** `develop` ← **Head:** `feature/payment-retries` · 7 files reviewed, 2 skipped, 1 deleted
+>
+> The PR adds retries to payment capture and returns the cancelled order from `CancelOrder`.
+> The retry is unsafe without idempotency, and the API contract change is not mirrored in the front end.
+>
+> #### Blocking (1)
+>
+> ##### F1 · `src/Orders/OrderService.cs:88-94` · bug · confidence 0.85 · confirmed
+> **Retry loop can charge the card twice on timeout**
+>
+> A timeout after the provider accepted the charge is retried without an idempotency key,
+> so a slow provider double-charges. The catch at line 90 treats `TaskCanceledException`
+> like a transport failure.
+>
+> _Verification (confirmed): `ChargeAsync` has no idempotency parameter and the provider SDK
+> documents timeouts as ambiguous._
+>
+> **Suggestion:** Pass the order id as the idempotency key to `_payments.ChargeAsync`.
 
 Alongside it, `findings.json` carries the same data with severity, category, confidence, verification status and coverage, which the build gate and the pull request comment script both read.
 
