@@ -64,20 +64,25 @@ To add a language: write `references/checklist-<name>.md`, map its extensions un
 
 ## Testing
 
-There is no automated suite yet. Before opening a pull request, run at least:
+Run the self-test before opening a pull request:
 
-1. **Parse check** under both PowerShell editions, as above.
-2. **Change set** on a scratch repository with a modified, added, renamed, deleted, binary and lock file, in commit mode and with `-IncludeWorkingTree`.
-3. **Driver dry run** for both harnesses, and read the printed command lines:
+```powershell
+pwsh -File tests/Invoke-SelfTest.ps1
+```
+
+It builds the fixture repository, replays a recorded real review through the driver, merge and gate, and checks the result exactly, in about 15 seconds. CI runs it on Linux and Windows on every push, together with a parse check and an ASCII check of every script. [tests/README.md](tests/README.md) explains what it covers.
+
+Depending on what you changed, also:
+
+1. **Parse check** under both PowerShell editions, as above, for any script change.
+2. **Driver dry run** for both harnesses after changing a command template, and read the printed command lines:
 
    ```powershell
    pwsh -File .claude/skills/pr-review/scripts/Invoke-PrReview.ps1 -Harness claude -Base main -DryRun
    ```
 
-4. **Merge and gate** against a hand-written `file-results.jsonl`, including a malformed line, a file with an `error`, and no `integration-result.json`. The verdict must be `incomplete` when nothing could be reviewed.
-5. **A real review** on a small branch, if you have a signed-in assistant.
-
-A stand-in harness makes the driver testable without a model: a script that reads the prompt file and prints a canned JSON block. That is how the merge, retry and parallelism paths were verified.
+3. **A live self-test** after changing a prompt, an instruction file or a checklist, with `-Harness claude` or `-Harness copilot`. The scorecard is the only way to tell whether a wording change helped, and it makes before and after comparable.
+4. **A new recording** after changing the fixture, as described in [tests/README.md](tests/README.md#changing-the-fixture-or-the-recording).
 
 ## Commits and pull requests
 
@@ -99,7 +104,7 @@ Welcome:
 - New `harnesses` entries for other assistants.
 - A GitHub Actions workflow and a `gh`-based comment script.
 - Sharper checklist items, backed by a false positive or a miss you actually hit.
-- Automated tests.
+- More self-test fixtures, for example a Python or SQL change set, each with its own answer key.
 
 Probably not:
 

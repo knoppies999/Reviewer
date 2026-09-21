@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.2.0] - 2026-09-21
 
+### Added
+
+- **End-to-end self-test** in `tests/`. `New-SampleRepo.ps1` builds a C# and TypeScript repository with twelve planted defects; a replay harness answers the driver from a recorded real review, so the real driver, merge and gate all run; `Measure-Review.ps1` scores any review of the fixture against `answer-key.json`. Offline it takes about 15 seconds and needs no credentials; with `-Harness` it measures a live model. It includes explicit regression checks for both merge bugs below, and fails 11 of its 31 checks against the merge from 0.1.0.
+- **GitHub Actions workflow** running the self-test on Linux and Windows on every push and pull request, with a parse check and an ASCII check of every script. On Windows the merge and gate are repeated under Windows PowerShell 5.1.
+
 ### Fixed
 
 - **Over-merging.** Two different defects on the same line and category were folded into one finding, and the second one's detail and suggestion were lost. The same-file safety net now also requires similar titles before folding, and a folded finding is kept under `duplicates` instead of being reduced to a mention.

@@ -131,14 +131,25 @@ docs/                               installation, usage, configuration, architec
 | [docs/azure-pipelines.md](docs/azure-pipelines.md) | Pipeline setup, credentials, permissions, template parameters, the gate |
 | [docs/architecture.md](docs/architecture.md) | How the pieces fit, data formats, extension points, design rationale |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Symptoms, causes and fixes |
+| [tests/README.md](tests/README.md) | The end-to-end self-test, its answer key, and how to score any review |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Conventions for changing the skill, the scripts or the checklists |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 
 ---
 
+## Testing
+
+```bash
+pwsh -File tests/Invoke-SelfTest.ps1
+```
+
+The self-test builds a small C# and TypeScript repository with twelve planted defects, runs the real review scripts over it with a recorded model run replayed in place of the model, and checks the result against an answer key. It needs no credentials, takes about 15 seconds, and runs on every push on Linux and Windows. Add `-Harness claude` or `-Harness copilot` to measure a live model on the same fixture. [tests/README.md](tests/README.md) has the details.
+
+---
+
 ## Requirements
 
-- **PowerShell 7** (`pwsh`) for the driver. The other four scripts also run on Windows PowerShell 5.1.
+- **PowerShell 7** (`pwsh`) for the driver and the self-test. The other four scripts also run on Windows PowerShell 5.1.
 - **Git** 2.20 or newer, with full history available (`fetchDepth: 0` on a pipeline).
 - One assistant: **GitHub Copilot** (VS Code Chat, or `npm i -g @github/copilot`) or **Claude Code** (`npm i -g @anthropic-ai/claude-code`).
 - For the pipeline: an Azure DevOps project, a credential for the assistant, and *Contribute to pull requests* for the build identity.
@@ -149,7 +160,9 @@ docs/                               installation, usage, configuration, architec
 
 Verified locally: all five scripts parse and run under PowerShell 7 and Windows PowerShell 5.1; the change-set script against a scratch repository in commit, working-tree and pipeline-environment modes; the driver end to end against a stand-in harness covering parallelism, retries, JSON extraction, the integration pass, merge and report; merge edge cases including malformed results, failed files and a missing integration pass; the gate in every mode including the incomplete-review path; and the pull request comment script against a mock of the Azure DevOps threads API.
 
-Not yet exercised against a live service: a real Copilot subscription, a logged-in Claude Code CLI, or an Azure DevOps organisation. A driver run was launched against the Claude Code CLI on the author's machine and correctly reported `incomplete` because that CLI was not signed in. Expect to tune models, tool permissions and prompt wording on the first real runs.
+One real review has been run, in Claude Code against the self-test fixture. It found all twelve planted defects and six further real ones, did not report the planted false positive, and the integration pass corrected five of the per-file reviewers' claims with evidence. That run is recorded, and the offline self-test replays it through every script on each push.
+
+Not yet exercised against a live service: the Copilot CLI, the driver calling a signed-in Claude Code CLI, or an Azure DevOps organisation. Expect to tune models, tool permissions and prompt wording on the first pipeline runs.
 
 ## License
 

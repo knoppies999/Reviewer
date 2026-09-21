@@ -1,0 +1,200 @@
+{
+  "verifications": [
+    {
+      "id": "F1",
+      "verdict": "confirmed",
+      "reason": "Confirmed: nothing between the query string and _provider.RefundAsync checks the amount or the order's state. MVC also binds a missing non-nullable decimal to 0 without a model-state error, so a POST to /refund with no amount still reaches the provider. F16 is the same defect in the service layer. When the cap is added (amount > 0, amount <= Total - RefundedAmount, Status == Captured), enforce it atomically with a concurrency token or a conditional UPDATE. Repeat clicks on the page (F24) already send concurrent requests, and both would pass an in-memory check."
+    },
+    {
+      "id": "F2",
+      "verdict": "unverified",
+      "reason": "The missing checks are real: Refund adds no policy, and FindAsync filters by id only, with no scoping to the caller. A bare class-level [Authorize] enforces AuthorizationOptions.DefaultPolicy (FallbackPolicy does not apply to endpoints that carry [Authorize]). That policy and the authentication setup both live in Program.cs, which is not in the repository. OrderSummary shows customerEmail next to a Capture button, which looks like a staff screen. Check two things: can customers get a token for this API (if so, this is an IDOR that also returns other customers' CustomerEmail), and does DefaultPolicy require a staff role? Either way, an action that sends money out should have its own refund policy."
+    },
+    {
+      "id": "F3",
+      "verdict": "confirmed",
+      "reason": "Confirmed: FindAsync loads with AsNoTracking, OrderRepository has no write method, and the repository has no SaveChanges, Update, Attach or Entry call anywhere. Even a unit-of-work SaveChanges outside this snapshot would not see the change to the detached entity, and Status is never set to Refunded. TotalFor has no callers yet, so the stale-revenue part is latent. F17 is the same defect in the service layer."
+    },
+    {
+      "id": "F4",
+      "verdict": "confirmed",
+      "reason": "Confirmed: the action passes ct to FindAsync, but RefundAsync has no token parameter and hard-codes CancellationToken.None, unlike the Capture path at line 28. F20 is the same defect on the service side. When fixing it, bound the provider call with a timeout rather than only the request-aborted token. A refund cannot be safely repeated, so cancelling it after the provider has moved the money leaves the outcome unknown and skips the bookkeeping."
+    },
+    {
+      "id": "F5",
+      "verdict": "confirmed",
+      "reason": "Confirmed: ControllerBase.Problem with no statusCode returns a 500 ProblemDetails, and a provider exception from RefundAsync (which has no catch) also ends as a 500. The Capture action at line 29 already uses the same pattern, so fix both together. One correction: the only UI caller discards the response (F24), so today the user sees nothing at all, not a false success."
+    },
+    {
+      "id": "F6",
+      "verdict": "confirmed",
+      "reason": "Confirmed: the indexer throws KeyNotFoundException for 'refunded', 'cancelled', '' or any typo, and ToLower throws NullReferenceException on null. The old Where clause returned an empty list in these cases. SearchAsync has no callers in the repository, so the unhandled 500 lands on whatever endpoint or service outside this snapshot calls it."
+    },
+    {
+      "id": "F7",
+      "verdict": "unverified",
+      "reason": "Depends on how ShopContext maps Status, and ShopContext is not in the repository. With EF's default int mapping, SearchAsync fails either way. Against the deployed nvarchar column (this PR adds no migration), the predicate matches but the rows cannot be materialized (F11). After a migration to int, SQL Server cannot convert 'Captured' to int. With HasConversion<string>() the SQL is correct, and comparing against the enum name suggests the author assumed that mapping. Check ShopContext.OnModelCreating and ConfigureConventions. The suggested LINQ Where(o => o.Status == mapped) is correct under both mappings."
+    },
+    {
+      "id": "F8",
+      "verdict": "confirmed",
+      "reason": "Confirmed as a latent risk: FromSqlRaw with an interpolated string puts the value straight into the SQL, and only the fixed dictionary keeps caller input out today. One correction: EF Core 8 and later ship analyzer EF1002, which warns on exactly this call. The claim of no analyzer warning only holds on older EF versions or when that warning is suppressed."
+    },
+    {
+      "id": "F9",
+      "verdict": "confirmed",
+      "reason": "Confirmed, with a corrected example: under tr-TR, 'PENDING'.ToLower() gives 'pend\u0131ng' with a dotless U+0131 (checked with .NET's tr-TR TextInfo). That misses StatusMap and throws. Only inputs with an uppercase I are affected ('Pending' and 'CAPTURED' lowercase correctly). With request localization, the culture can come from the caller's Accept-Language header."
+    },
+    {
+      "id": "F10",
+      "verdict": "confirmed",
+      "reason": "Confirmed: Any() plus two Sum calls go through the source up to three times. TotalFor has no callers yet, so this is latent. Because the parameter is IEnumerable<Order>, an IQueryable argument binds to Enumerable, so each pass would load full rows into memory instead of summing in SQL."
+    },
+    {
+      "id": "F11",
+      "verdict": "confirmed",
+      "reason": "Confirmed however Status is mapped: RefundedAmount is a new mapped property with no migration, so every Orders query fails against the deployed schema. That includes SearchAsync's SELECT *, because EF requires every mapped column in FromSql results. The Status half depends on ShopContext, which is not in the repository. With the default int mapping, existing 'Pending' strings fail to materialize; HasConversion<string>() would keep the string column. The only change under Migrations/ is a hand edit that bumps a constant in the auto-generated Init.Designer.cs, which the per-file pass skipped. It contains no schema operation, and editing a migration that has already been applied would not run anyway."
+    },
+    {
+      "id": "F12",
+      "verdict": "unverified",
+      "reason": "There is no JsonStringEnumConverter, JsonSerializerOptions or [JsonConverter] anywhere in the repository, but Program.cs, where AddJsonOptions would live, is missing too. With default System.Text.Json the field becomes a number from 0 to 3. With a plain JsonStringEnumConverter it becomes 'Captured'. Only a camelCase converter produces the 'captured' that OrderPage expects. Check Program.cs. The break on the page side is confirmed independently under F25."
+    },
+    {
+      "id": "F13",
+      "verdict": "unverified",
+      "reason": "This holds if Status is stored as an int (the EF default without HasConversion) or serialized as a number (the System.Text.Json default). ShopContext and Program.cs are not in the repository, so neither can be checked. Explicit member values are cheap insurance for both the database and the JSON contract."
+    },
+    {
+      "id": "F14",
+      "verdict": "confirmed",
+      "reason": "Confirmed: ChargeAsync(orderId, total, ct) takes no idempotency key, and IPaymentProvider is not in the repository, so nothing shows that a repeat call collapses into the first one. Unless the provider derives a key from the order id, a failure after the provider has accepted the charge leads to a second charge. The decline case is certain: when Succeeded is false nothing is thrown, so the loop re-submits immediately with no delay. The false result then becomes a 500 'Capture failed' while the Capture button stays clickable, which invites more attempts."
+    },
+    {
+      "id": "F15",
+      "verdict": "confirmed",
+      "reason": "Confirmed: ASP.NET Core has no SynchronizationContext, so an exception escaping an async void method is rethrown on the thread pool and terminates the process. It also bypasses CaptureAsync's catch. Small correction: the write is not cancelled when the request ends; it keeps running unobserved. If IAuditLog is scoped (its registration is not in the repository), the write can run against disposed request-scoped dependencies, and the resulting ObjectDisposedException crashes the process."
+    },
+    {
+      "id": "F16",
+      "verdict": "confirmed",
+      "reason": "Confirmed: this is the same defect as F1, in the service layer. Before calling the provider, RefundAsync checks neither amount > 0, amount <= Total - RefundedAmount, nor Status == Captured.",
+      "duplicateOf": "F1"
+    },
+    {
+      "id": "F17",
+      "verdict": "confirmed",
+      "reason": "Confirmed (same defect as F3): the order is loaded with AsNoTracking, OrderRepository has no write method, and nothing in the repository calls SaveChanges, Update or Attach. The increment is lost when the request ends, yet the response still shows the higher RefundedAmount.",
+      "duplicateOf": "F3"
+    },
+    {
+      "id": "F18",
+      "verdict": "confirmed",
+      "reason": "Confirmed: catch (Exception) also catches OperationCanceledException and logs nothing, and Task.Delay(500) ignores ct. A second charge after cancellation only happens with a provider that ignores an already-cancelled token. With a typical HttpClient-based provider the later attempts fail at once, so the visible effect is about 1.5 s of pointless delay and a cancelled request reported as a failed capture."
+    },
+    {
+      "id": "F19",
+      "verdict": "confirmed",
+      "reason": "Confirmed: line 41 runs before result.Succeeded is read, so a declined refund still raises RefundedAmount. This is hidden today only because the entity is detached and the failure branch returns Problem instead of the order. It becomes a ledger error as soon as F3 and F17 are fixed."
+    },
+    {
+      "id": "F20",
+      "verdict": "confirmed",
+      "reason": "Confirmed (same defect as F4). When adding the parameter, bound the provider call with a timeout rather than only the request-aborted token, because cancelling a refund partway leaves its outcome unknown.",
+      "duplicateOf": "F4"
+    },
+    {
+      "id": "F21",
+      "verdict": "confirmed",
+      "reason": "Confirmed: RefundAsync never calls RecordAudit, and CaptureAsync audits only the success branch. The new audit trail therefore leaves out every refund and every failed capture."
+    },
+    {
+      "id": "F22",
+      "verdict": "confirmed",
+      "reason": "Confirmed: refundOrder returns res.json() whatever the status code. Problem('Refund failed') and NotFound() (which [ApiController] turns into ProblemDetails) both return JSON bodies, so the promise resolves with a ProblemDetails typed as Order, whose status field is the HTTP code. A 401 or 403 with an empty or HTML body rejects with a SyntaxError instead. The only caller discards the promise (F24), so today failures are hidden rather than reported wrongly."
+    },
+    {
+      "id": "F23",
+      "verdict": "confirmed",
+      "reason": "Confirmed that the expression does no rounding, but the example is wrong: 49.99 - 10.10 prints as 39.89 in JavaScript. Real cases, checked with Node: 49.99 - 19.99 renders '30.000000000000004 remaining' and 19.99 - 9.99 renders '9.999999999999998 remaining'. formatRefund has no callers yet, so this is latent."
+    },
+    {
+      "id": "F24",
+      "verdict": "confirmed",
+      "reason": "Confirmed in the code: the promise is discarded, the button is never disabled, and the endpoint has no idempotency key or cap (F1, F16), so repeat clicks send repeat full refunds. This is hidden today only because canRefund is never true (F25, F26). It will start happening as soon as that is fixed."
+    },
+    {
+      "id": "F25",
+      "verdict": "confirmed",
+      "reason": "Confirmed from both sides. 'captured' matches neither the default System.Text.Json output (1) nor a plain JsonStringEnumConverter ('Captured'). Nothing in the repository ever sets Status to Captured (see F26), so no order this code produces can show the Refund button. It would only render with a camelCase enum converter in Program.cs plus something outside this repository writing Captured."
+    }
+  ],
+  "findings": [
+    {
+      "file": "src/Shop.Api/Services/PaymentService.cs",
+      "line": 23,
+      "endLine": 26,
+      "severity": "blocking",
+      "category": "integration",
+      "title": "Nothing ever sets Status to Captured, so the refund gate can never open",
+      "detail": "The PR adds OrderStatus and shows the new Refund button only when order.status is 'captured' (web/src/pages/OrderPage.tsx:4). On success, CaptureAsync only writes an audit line saying 'captured' and returns true. It never assigns OrderStatus.Captured, and no code path in the repository saves an order. The Capture response (OrdersController.cs:29) therefore returns the order still marked Pending right after a successful charge. No order this code produces can ever show the Refund button, whatever the JSON enum settings are. RefundAsync likewise never moves an order to Refunded.",
+      "suggestion": "After a successful charge, set order.Status = OrderStatus.Captured and persist it; the repository needs a tracked load and SaveChangesAsync. Move the order to Refunded when RefundedAmount reaches Total, and make RefundAsync reject orders that are not Captured.",
+      "confidence": 0.75
+    },
+    {
+      "file": "web/src/api/orders.ts",
+      "line": 1,
+      "endLine": 6,
+      "severity": "should-fix",
+      "category": "integration",
+      "title": "TypeScript Order omits refundedAmount, so the UI always refunds the full total",
+      "detail": "The PR adds RefundedAmount to the C# Order, and the refund endpoint returns that entity. The TypeScript Order interface, which this PR also edits, still has only id, customerEmail, total and status. OrderPage therefore always asks for order.total (OrderPage.tsx:12), even when part of the order has already been refunded. formatRefund has to take the refunded amount as a separate argument, and no API response supplies it. Because the server does not cap the amount (F1, F16), a refund from this screen after a partial refund requests more than is left to refund.",
+      "suggestion": "Add refundedAmount: number to Order, along with a status union that matches what the API actually sends. Then send order.total - order.refundedAmount, or a user-entered amount checked against it.",
+      "confidence": 0.8
+    },
+    {
+      "file": "src/Shop.Api/Services/PaymentService.cs",
+      "line": 16,
+      "endLine": 43,
+      "severity": "should-fix",
+      "category": "tests",
+      "title": "Refunds and the new charge retry ship without any tests",
+      "detail": "The PR adds an endpoint that moves money, a three-attempt charge retry, a new status lookup and TotalFor, but it adds or changes no tests, and the repository has no test project at all. Several blocking findings in this review (the unbounded refund amount, the retried declined charge, SearchAsync throwing for 'refunded') are exactly what a few unit tests would catch: some against a fake IPaymentProvider, plus one SearchAsync case per OrderStatus value.",
+      "suggestion": "Add a test project that covers PaymentService.CaptureAsync and RefundAsync against a fake IPaymentProvider: amount bounds, declines not retried, state persisted. Also test OrderRepository.SearchAsync for every OrderStatus value, and the POST /api/orders/{id}/refund endpoint.",
+      "confidence": 0.8
+    },
+    {
+      "file": "web/package-lock.json",
+      "line": 1,
+      "severity": "should-fix",
+      "category": "dependencies",
+      "title": "Unexplained left-pad 1.3.0 entry added to package-lock.json",
+      "detail": "The lock file, which the per-file pass skipped, gains node_modules/left-pad 1.3.0 in a refunds PR. Nothing declares it: web/ has no package.json in the repository, and the lock file has no root package entry listing it. Nothing under web/src imports it. The entry also lacks the resolved and integrity fields that npm writes for registry packages, so it looks hand-edited. The next npm install will either prune it or install a deprecated package that nothing uses. Lock-file-only dependency changes like this are exactly what a skip pattern hides from review.",
+      "suggestion": "Revert the package-lock.json change. If a dependency is really needed, add it with npm install so package.json and the lock file agree. For padding, use String.prototype.padStart instead of left-pad.",
+      "confidence": 0.8
+    },
+    {
+      "file": "src/Shop.Api/Services/PaymentService.cs",
+      "line": 10,
+      "endLine": 14,
+      "severity": "question",
+      "category": "integration",
+      "title": "Is IAuditLog registered in DI, and does IPaymentProvider have RefundAsync?",
+      "detail": "PaymentService now takes an IAuditLog, and RefundAsync is the first code to call IPaymentProvider.RefundAsync(int, decimal, CancellationToken). Neither interface, any implementation, nor a composition root (Program.cs) is in the repository, and the PR changes none of them. If IAuditLog is not registered, PaymentService cannot be created, so every OrdersController request fails, capture included. If any IPaymentProvider implementation or test double lacks RefundAsync, the build breaks.",
+      "suggestion": "Point to the IAuditLog registration and its lifetime; a scoped lifetime combined with the async void write in F15 is a crash risk. Also point to the IPaymentProvider.RefundAsync member and its implementations, and add them to this PR if they are missing.",
+      "confidence": 0.7
+    },
+    {
+      "file": "src/Shop.Api/Services/PaymentService.cs",
+      "line": 16,
+      "endLine": 36,
+      "severity": "question",
+      "category": "maintainability",
+      "title": "Capture retry and audit logging are not in the PR description",
+      "detail": "The description covers a refund endpoint, the OrderStatus enum and refund tracking. The PR also rewrites the existing capture path with a three-attempt retry, a catch-all, a new IAuditLog dependency and an async void audit write. That change affects every capture and is where F14, F15 and F18 come from. Was it meant to ship with refunds, or should it be split into its own PR and reviewed separately?",
+      "confidence": 0.7
+    }
+  ],
+  "assessment": "The PR adds POST /api/orders/{id}/refund, an OrderStatus enum with RefundedAmount on Order, and a Refund button with its client call. Beyond what its description says, it also adds a retry loop and an audit write to the existing capture path. Refunds do not work yet: the amount comes from the client unchecked, the refund is never persisted, and RefundedAmount has no migration, so every Orders query fails against the deployed schema. The Refund button cannot render, because nothing sets Status to Captured and the status values used by the C# and TypeScript sides do not match. The biggest remaining risk is money moving without safeguards: refunds can exceed the order total or repeat, and the capture retry can charge a customer more than once, with none of it covered by tests.",
+  "verifyCommands": []
+}

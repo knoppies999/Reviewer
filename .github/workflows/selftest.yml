@@ -1,0 +1,46 @@
+# Runs the offline self-test on every push and pull request, on Linux and Windows.
+# Offline means the recorded review is replayed: no model is called and no secrets are needed.
+# On Windows the merge and gate are also repeated under Windows PowerShell 5.1.
+name: self-test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    name: offline self-test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Parse every PowerShell script
+        shell: pwsh
+        run: |
+          $failed = 0
+          foreach ($s in Get-ChildItem -Path .claude, tests -Filter *.ps1 -Recurse) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($s.FullName, [ref]$null, [ref]$errors)
+            if ($errors.Count) { $failed++; Write-Host "::error file=$($s.FullName)::$($errors[0].Message)" }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Scripts are ASCII only
+        shell: pwsh
+        run: |
+          $hits = Select-String -Path .claude/skills/pr-review/scripts/*.ps1, tests/*.ps1, tests/fixture/*.ps1 -Pattern '[^\x00-\x7F]'
+          if ($hits) { $hits | ForEach-Object { Write-Host "::error file=$($_.Path),line=$($_.LineNumber)::non-ASCII character" }; exit 1 }
+
+      - name: Offline self-test
+        shell: pwsh
+        run: ./tests/Invoke-SelfTest.ps1

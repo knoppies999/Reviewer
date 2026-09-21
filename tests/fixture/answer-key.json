@@ -1,0 +1,182 @@
+{
+  "$comment": "What a good review of feature/refunds against main must find. Built by New-SampleRepo.ps1. A location matches a finding when the file is the same, the line ranges overlap within lineTolerance, and the finding's title or detail contains one of the keywords (case-insensitive). Each finding, including the duplicates folded into it, can satisfy at most one defect, so two defects merged into one finding count as one miss.",
+  "lineTolerance": 3,
+
+  "expectedReviewed": [
+    "src/Shop.Api/Controllers/OrdersController.cs",
+    "src/Shop.Api/Data/OrderRepository.cs",
+    "src/Shop.Api/Models/Order.cs",
+    "src/Shop.Api/Services/PaymentService.cs",
+    "web/src/api/orders.ts",
+    "web/src/pages/OrderPage.tsx"
+  ],
+  "expectedSkipped": [
+    "src/Shop.Api/Migrations/20260101000000_Init.Designer.cs",
+    "web/package-lock.json"
+  ],
+
+  "planted": [
+    {
+      "id": "D1",
+      "title": "Raw SQL built by string interpolation into FromSqlRaw",
+      "minSeverity": "should-fix",
+      "anyOf": [
+        { "file": "src/Shop.Api/Data/OrderRepository.cs", "lines": [23, 25], "keywords": ["FromSqlRaw", "interpolat", "injection", "parameteri", "raw SQL"] }
+      ]
+    },
+    {
+      "id": "D2",
+      "title": "Charge retried with no idempotency key, so a customer can be charged twice",
+      "minSeverity": "blocking",
+      "anyOf": [
+        { "file": "src/Shop.Api/Services/PaymentService.cs", "lines": [18, 27], "keywords": ["idempoten", "charged twice", "charge twice", "double-charge", "double charge", "billed twice", "bill the customer"] }
+      ]
+    },
+    {
+      "id": "D3",
+      "title": "async void audit write is unobservable and can crash the process",
+      "minSeverity": "blocking",
+      "anyOf": [
+        { "file": "src/Shop.Api/Services/PaymentService.cs", "lines": [45, 48], "keywords": ["async void"] }
+      ]
+    },
+    {
+      "id": "D4",
+      "title": "OrderStatus became an enum but the TypeScript client and page still treat it as the string \"captured\"",
+      "minSeverity": "blocking",
+      "anyOf": [
+        { "file": "web/src/pages/OrderPage.tsx", "lines": [4, 4], "keywords": ["captured"] },
+        { "file": "web/src/api/orders.ts", "lines": [1, 6], "keywords": ["status"] },
+        { "file": "src/Shop.Api/Models/Order.cs", "lines": [16, 16], "keywords": ["JSON", "serializ", "TypeScript"] }
+      ]
+    },
+    {
+      "id": "D5",
+      "title": "RefundAsync takes no CancellationToken and passes CancellationToken.None",
+      "minSeverity": "should-fix",
+      "anyOf": [
+        { "file": "src/Shop.Api/Services/PaymentService.cs", "lines": [38, 40], "keywords": ["CancellationToken"] },
+        { "file": "src/Shop.Api/Controllers/OrdersController.cs", "lines": [33, 37], "keywords": ["CancellationToken"] }
+      ]
+    },
+    {
+      "id": "D6",
+      "title": "Task.Delay in the retry loop ignores the cancellation token",
+      "minSeverity": "should-fix",
+      "anyOf": [
+        { "file": "src/Shop.Api/Services/PaymentService.cs", "lines": [29, 32], "keywords": ["Task.Delay", "Delay(500)"] }
+      ]
+    },
+    {
+      "id": "D7",
+      "title": "StatusMap indexer throws KeyNotFoundException for an unknown or new status",
+      "minSeverity": "should-fix",
+      "anyOf": [
+        { "file": "src/Shop.Api/Data/OrderRepository.cs", "lines": [22, 22], "keywords": ["KeyNotFound", "TryGetValue", "indexer", "unknown status"] }
+      ]
+    },
+    {
+      "id": "D8",
+      "title": "ToLower() is culture-sensitive",
+      "minSeverity": "should-fix",
+      "anyOf": [
+        { "file": "src/Shop.Api/Data/OrderRepository.cs", "lines": [22, 22], "keywords": ["culture", "ToLowerInvariant", "Turkish", "OrdinalIgnoreCase", "invariant"] }
+      ]
+    },
+    {
+      "id": "D9",
+      "title": "TotalFor enumerates the IEnumerable several times",
+      "minSeverity": "should-fix",
+      "anyOf": [
+        { "file": "src/Shop.Api/Data/OrderRepository.cs", "lines": [30, 31], "keywords": ["enumerat", "three times", "twice"] }
+      ]
+    },
+    {
+      "id": "D10",
+      "title": "refundOrder does not check res.ok, so an error response is parsed as an Order",
+      "minSeverity": "should-fix",
+      "anyOf": [
+        { "file": "web/src/api/orders.ts", "lines": [14, 18], "keywords": ["res.ok", "status code", "error response"] }
+      ]
+    },
+    {
+      "id": "D11",
+      "title": "formatRefund's (x * 100) / 100 does no rounding on floating-point money",
+      "minSeverity": "should-fix",
+      "anyOf": [
+        { "file": "web/src/api/orders.ts", "lines": [21, 23], "keywords": ["round", "no-op", "floating", "toFixed", "currency"] }
+      ]
+    },
+    {
+      "id": "D12",
+      "title": "Refund button fires an un-awaited promise with no error handling",
+      "minSeverity": "should-fix",
+      "anyOf": [
+        { "file": "web/src/pages/OrderPage.tsx", "lines": [11, 15], "keywords": ["await", "promise", "forget", "unhandled", "disable"] }
+      ]
+    }
+  ],
+
+  "additional": [
+    {
+      "id": "A1",
+      "title": "Refund amount is never validated: negative or over-total refunds are accepted",
+      "minSeverity": "should-fix",
+      "anyOf": [
+        { "file": "src/Shop.Api/Controllers/OrdersController.cs", "lines": [33, 37], "keywords": ["validat", "negative", "capped", "exceed", "more than"] },
+        { "file": "src/Shop.Api/Services/PaymentService.cs", "lines": [38, 40], "keywords": ["validat", "negative", "capped", "exceed", "more than"] }
+      ]
+    },
+    {
+      "id": "A2",
+      "title": "The refund is never persisted (AsNoTracking entity, no SaveChanges)",
+      "minSeverity": "should-fix",
+      "anyOf": [
+        { "file": "src/Shop.Api/Controllers/OrdersController.cs", "lines": [35, 38], "keywords": ["SaveChanges", "persist", "AsNoTracking"] },
+        { "file": "src/Shop.Api/Services/PaymentService.cs", "lines": [41, 42], "keywords": ["SaveChanges", "persist", "AsNoTracking"] }
+      ]
+    },
+    {
+      "id": "A3",
+      "title": "No migration for the Status type change or the new RefundedAmount column",
+      "minSeverity": "should-fix",
+      "anyOf": [
+        { "file": "src/Shop.Api/Models/Order.cs", "lines": [16, 17], "keywords": ["migration"] }
+      ]
+    },
+    {
+      "id": "A4",
+      "title": "Nothing ever sets Status to Captured, so the Refund button can never render",
+      "minSeverity": "should-fix",
+      "anyOf": [
+        { "file": "src/Shop.Api/Services/PaymentService.cs", "lines": [16, 36], "keywords": ["sets Status to Captured", "set to Captured", "never assign"] }
+      ]
+    },
+    {
+      "id": "A5",
+      "title": "Refund endpoint has no ownership or role check",
+      "minSeverity": "question",
+      "anyOf": [
+        { "file": "src/Shop.Api/Controllers/OrdersController.cs", "lines": [32, 37], "keywords": ["ownership", "IDOR", "role", "belong"] }
+      ]
+    },
+    {
+      "id": "A6",
+      "title": "Unexplained left-pad entry added to package-lock.json",
+      "minSeverity": "question",
+      "anyOf": [
+        { "file": "web/package-lock.json", "lines": [1, 1], "keywords": ["left-pad"] }
+      ]
+    }
+  ],
+
+  "mustNotReport": [
+    {
+      "id": "N1",
+      "title": "Null dereference of order in RefundAsync: both callers return NotFound first, so it is unreachable",
+      "file": "src/Shop.Api/Services/PaymentService.cs",
+      "lines": [38, 43],
+      "titleKeywords": ["null"]
+    }
+  ]
+}
