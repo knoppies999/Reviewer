@@ -1,0 +1,29 @@
+# Normalise everything to LF in the repository and on checkout. The PowerShell
+# scripts run on Windows agents and on Linux build agents through pwsh, and both
+# read LF correctly, so a single line ending avoids spurious diffs between them.
+* text=auto eol=lf
+
+*.ps1   text eol=lf
+*.psm1  text eol=lf
+*.psd1  text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+
+# Binary
+*.png   binary
+*.jpg   binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.zip   binary
+
+# Keep generated review artifacts out of diffs if one is ever committed by mistake.
+*.diff  -diff
+full.diff linguist-generated=true
+
+# GitHub language stats: docs and prompts are the bulk of the repo but PowerShell
+# is what actually runs, so let the scripts count and leave the prose out.
+.claude/skills/pr-review/references/** linguist-documentation=true
+docs/** linguist-documentation=true

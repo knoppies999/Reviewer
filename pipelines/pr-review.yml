@@ -1,0 +1,199 @@
+# Azure DevOps step template: AI pull-request review, runnable with GitHub Copilot CLI or Claude Code.
+#
+# Include it from a PR validation pipeline (wired to the branch policy as "Build validation"):
+#
+#   trigger: none
+#   pr:
+#     branches:
+#       include: [develop, main]
+#   pool:
+#     vmImage: ubuntu-latest
+#   variables:
+#   - group: ai-review            # holds COPILOT_GITHUB_TOKEN and/or ANTHROPIC_API_KEY
+#   steps:
+#   - template: pipelines/pr-review.yml
+#     parameters:
+#       harness: copilot          # copilot | claude
+#       gate: blocking            # blocking | security | none
+#
+# Prerequisites (details in README.md):
+#   1. A secret variable for the harness:
+#        copilot: COPILOT_GITHUB_TOKEN, a GitHub fine-grained PAT with the "Copilot Requests" permission
+#                 from a user with a Copilot seat whose organisation allows the Copilot CLI.
+#        claude:  ANTHROPIC_API_KEY, an Anthropic Console API key.
+#   2. The build service identity ("<project> Build Service (<org>)") needs "Contribute to pull
+#      requests" on the repository so the report can be posted as a PR comment.
+#   3. The repository contains .claude/skills/pr-review/ (and, for the "agent" runner, .github/agents/).
+#
+# Runners:
+#   driver (default)  scripts/Invoke-PrReview.ps1 calls the harness CLI once per file, once for the
+#                     integration pass, and merges deterministically. Works with either harness.
+#   agent             the harness's own orchestrator agent runs the whole skill in one session
+#                     (Copilot only; relies on the model spawning subagents).
+#
+# Gate override at queue time: define a pipeline variable PR_REVIEW_GATE (blocking | security | none);
+# it takes precedence over the template parameter.
+
+parameters:
+- name: harness
+  displayName: 'AI harness CLI to run the review with'
+  type: string
+  default: copilot
+  values: [copilot, claude]
+- name: runner
+  displayName: 'driver = script drives the CLI per file (recommended); agent = harness orchestrates (Copilot only)'
+  type: string
+  default: driver
+  values: [driver, agent]
+- name: gate
+  displayName: 'Fail the build on: blocking findings, security findings only, or never'
+  type: string
+  default: blocking
+  values: [blocking, security, none]
+- name: model
+  displayName: 'Model id for the harness (empty = its default)'
+  type: string
+  default: ''
+- name: maxParallel
+  displayName: 'Parallel per-file reviews (driver runner)'
+  type: number
+  default: 4
+- name: inlineComments
+  displayName: 'Also post one inline PR thread per blocking finding'
+  type: boolean
+  default: false
+- name: baseBranch
+  displayName: 'Base branch override (empty = PR target branch)'
+  type: string
+  default: ''
+- name: cliVersion
+  displayName: 'npm version of the harness CLI (@github/copilot or @anthropic-ai/claude-code)'
+  type: string
+  default: latest
+- name: nodeVersion
+  type: string
+  default: '22.x'
+- name: timeoutMinutes
+  type: number
+  default: 45
+- name: skillPath
+  type: string
+  default: .claude/skills/pr-review
+- name: extraCliArgs
+  displayName: 'Extra arguments appended to every harness CLI call'
+  type: string
+  default: ''
+
+steps:
+- checkout: self
+  fetchDepth: 0                # full history: the target branch and merge base must be available
+  persistCredentials: true     # lets Get-PrDiff.ps1 fetch the target branch if the checkout did not
+  displayName: 'PR review: checkout'
+
+- task: NodeTool@0
+  displayName: 'PR review: use Node ${{ parameters.nodeVersion }}'
+  inputs:
+    versionSpec: '${{ parameters.nodeVersion }}'
+
+- ${{ if eq(parameters.harness, 'copilot') }}:
+  - script: npm install -g @github/copilot@${{ parameters.cliVersion }} --no-fund --no-audit
+    displayName: 'PR review: install Copilot CLI'
+- ${{ if eq(parameters.harness, 'claude') }}:
+  - script: npm install -g @anthropic-ai/claude-code@${{ parameters.cliVersion }} --no-fund --no-audit
+    displayName: 'PR review: install Claude Code'
+
+- pwsh: |
+    $out = Join-Path $env:BUILD_ARTIFACTSTAGINGDIRECTORY 'pr-review'
+    $script = Join-Path $env:BUILD_SOURCESDIRECTORY '${{ parameters.skillPath }}/scripts/Get-PrDiff.ps1'
+    $params = @{ OutputDir = $out }
+    if ('${{ parameters.baseBranch }}') { $params.Base = '${{ parameters.baseBranch }}' }
+    & $script @params
+    Write-Host "##vso[task.setvariable variable=PR_REVIEW_OUTPUT_DIR]$out"
+  displayName: 'PR review: compute change set'
+  env:
+    SYSTEM_ACCESSTOKEN: $(System.AccessToken)   # used only to read the PR title and description
+
+# ---- runner: driver (script drives the harness CLI; works with copilot and claude) ----
+- ${{ if eq(parameters.runner, 'driver') }}:
+  - pwsh: |
+      $out = $env:PR_REVIEW_OUTPUT_DIR
+      $script = Join-Path $env:BUILD_SOURCESDIRECTORY '${{ parameters.skillPath }}/scripts/Invoke-PrReview.ps1'
+      $params = @{
+        Harness      = '${{ parameters.harness }}'
+        ManifestPath = (Join-Path $out 'manifest.json')
+        OutputDir    = $out
+        MaxParallel  = ${{ parameters.maxParallel }}
+        CI           = $true
+      }
+      if ('${{ parameters.model }}') { $params.Model = '${{ parameters.model }}' }
+      if ('${{ parameters.extraCliArgs }}') { $params.ExtraArgs = @('${{ parameters.extraCliArgs }}' -split ' ' | Where-Object { $_ }) }
+      & $script @params
+      exit $LASTEXITCODE
+    displayName: 'PR review: run (${{ parameters.harness }} driver)'
+    timeoutInMinutes: ${{ parameters.timeoutMinutes }}
+    continueOnError: true      # the comment, artifact and gate steps still run; the gate decides pass/fail
+    env:
+      CI: 'true'
+      ${{ if eq(parameters.harness, 'copilot') }}:
+        COPILOT_GITHUB_TOKEN: $(COPILOT_GITHUB_TOKEN)
+        COPILOT_ALLOW_ALL: 'true'   # exactly "true" also trusts the working directory so .github and .claude config load
+      ${{ if eq(parameters.harness, 'claude') }}:
+        ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
+
+# ---- runner: agent (Copilot's own orchestrator agent runs the whole skill in one session) ----
+- ${{ if eq(parameters.runner, 'agent') }}:
+  - pwsh: |
+      if ('${{ parameters.harness }}' -ne 'copilot') { throw "The 'agent' runner is only implemented for the copilot harness; use runner: driver." }
+      $out = $env:PR_REVIEW_OUTPUT_DIR
+      $manifest = Join-Path $out 'manifest.json'
+      if (-not (Test-Path -LiteralPath $manifest)) { throw "No manifest at $manifest; the compute step failed." }
+      $prompt = "/pr-review Review this pull request in pipeline mode. The change set is already computed: use the manifest at $manifest and do not run Get-PrDiff.ps1 again. Write the outputs to $out. Do not ask questions; make conservative choices and note them."
+      # --allow-all-tools is required for non-interactive mode; the deny rules below still take precedence.
+      $cliArgs = @(
+        '--agent=pr-review', '-p', $prompt, '-s', '--no-ask-user', '--allow-all-tools',
+        '--deny-tool=shell(git push)', '--deny-tool=shell(git commit)', '--deny-tool=shell(git reset)',
+        '--deny-tool=shell(git checkout)', '--deny-tool=shell(git switch)', '--deny-tool=shell(git rebase)',
+        '--deny-tool=shell(git merge)', '--deny-tool=shell(git stash)', '--deny-tool=shell(git clean)',
+        "--add-dir=$($env:BUILD_SOURCESDIRECTORY)", "--add-dir=$out",
+        "--usage-output-file=$(Join-Path $out 'copilot-usage.json')", '--no-auto-update'
+      )
+      if ('${{ parameters.model }}') { $cliArgs += "--model=${{ parameters.model }}" }
+      if ('${{ parameters.extraCliArgs }}') { $cliArgs += ('${{ parameters.extraCliArgs }}' -split ' ' | Where-Object { $_ }) }
+      copilot @cliArgs
+      if ($LASTEXITCODE -ne 0) { Write-Host "##vso[task.logissue type=warning]Copilot CLI exited with code $LASTEXITCODE" }
+      if (-not (Test-Path -LiteralPath (Join-Path $out 'findings.json'))) {
+        Write-Host "##vso[task.logissue type=error]The review did not produce findings.json; see the output above."
+        exit 1
+      }
+    displayName: 'PR review: run (copilot agent)'
+    timeoutInMinutes: ${{ parameters.timeoutMinutes }}
+    continueOnError: true
+    env:
+      CI: 'true'
+      COPILOT_GITHUB_TOKEN: $(COPILOT_GITHUB_TOKEN)
+      COPILOT_ALLOW_ALL: 'true'
+
+- pwsh: |
+    $script = Join-Path $env:BUILD_SOURCESDIRECTORY '${{ parameters.skillPath }}/scripts/Publish-AdoPrComment.ps1'
+    $params = @{ NotifyOnMissing = $true }
+    if ('${{ parameters.inlineComments }}' -eq 'True') { $params.InlineComments = $true }
+    & $script @params
+  displayName: 'PR review: post report to the pull request'
+  condition: and(succeededOrFailed(), ne(variables['System.PullRequest.PullRequestId'], ''))
+  continueOnError: true
+  env:
+    SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+- task: PublishPipelineArtifact@1
+  displayName: 'PR review: publish artifact'
+  condition: succeededOrFailed()
+  inputs:
+    targetPath: $(Build.ArtifactStagingDirectory)/pr-review
+    artifact: pr-review
+
+- pwsh: |
+    $gate = if ($env:PR_REVIEW_GATE) { $env:PR_REVIEW_GATE } else { '${{ parameters.gate }}' }
+    & (Join-Path $env:BUILD_SOURCESDIRECTORY '${{ parameters.skillPath }}/scripts/Test-ReviewGate.ps1') -Gate $gate
+    exit $LASTEXITCODE
+  displayName: 'PR review: gate'
+  condition: succeededOrFailed()

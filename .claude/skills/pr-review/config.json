@@ -1,0 +1,71 @@
+{
+  "$comment": "Settings for the pr-review skill. The scripts and the agents read this file; edit it to tune the review. Gate values: blocking | security | none. Harness entries drive scripts/Invoke-PrReview.ps1; placeholders {{prompt}}, {{promptFile}}, {{repoRoot}}, {{outputDir}}, {{skillRoot}}, {{model}} and {{allowedTools}} are filled in per call.",
+
+  "baseBranchCandidates": ["develop", "main", "master"],
+  "reportDirName": ".pr-review",
+
+  "maxParallelSubagents": 4,
+  "filesPerSubagent": 1,
+  "maxDiffLinesPerFile": 1500,
+  "minConfidence": 0.6,
+  "reviewDeletedFiles": false,
+
+  "gate": "blocking",
+  "failOnMissingReport": true,
+  "failOnIncomplete": true,
+  "postInlineComments": false,
+  "inlineCommentSeverities": ["blocking"],
+
+  "verifyCommands": [],
+  "conventions": [],
+
+  "skipPatterns": [
+    "**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml", "**/packages.lock.json", "**/*.lock",
+    "**/*.min.js", "**/*.min.css", "**/*.map", "**/*.snap",
+    "**/*.designer.cs", "**/*.Designer.cs", "**/*.g.cs", "**/*.g.i.cs", "**/*.generated.*",
+    "**/Migrations/*.Designer.cs", "**/*ModelSnapshot.cs",
+    "**/obj/**", "**/bin/**", "**/dist/**", "**/build/**", "**/node_modules/**", "**/.pr-review/**",
+    "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.gif", "**/*.ico", "**/*.svg", "**/*.pdf",
+    "**/*.woff", "**/*.woff2", "**/*.ttf", "**/*.eot",
+    "**/*.dll", "**/*.exe", "**/*.pdb", "**/*.zip", "**/*.nupkg", "**/*.snk", "**/*.pfx"
+  ],
+
+  "checklists": {
+    "cs": "csharp", "csx": "csharp", "razor": "csharp", "cshtml": "csharp",
+    "ts": "typescript", "tsx": "typescript", "js": "typescript", "jsx": "typescript",
+    "mjs": "typescript", "cjs": "typescript", "vue": "typescript", "svelte": "typescript",
+    "*": "general"
+  },
+
+  "harnesses": {
+    "copilot": {
+      "$comment": "GitHub Copilot CLI (npm i -g @github/copilot). Auth: COPILOT_GITHUB_TOKEN. --allow-all-tools is required in -p mode; deny rules still win.",
+      "command": "copilot",
+      "args": [
+        "-p", "{{prompt}}", "-s", "--no-ask-user", "--allow-all-tools",
+        "--deny-tool=shell(git push)", "--deny-tool=shell(git commit)", "--deny-tool=shell(git reset)",
+        "--deny-tool=shell(git checkout)", "--deny-tool=shell(git switch)", "--deny-tool=shell(git rebase)",
+        "--deny-tool=shell(git merge)", "--deny-tool=shell(git stash)", "--deny-tool=shell(git clean)",
+        "--add-dir={{repoRoot}}", "--add-dir={{outputDir}}", "--add-dir={{skillRoot}}", "--no-auto-update"
+      ],
+      "modelArgs": ["--model={{model}}"],
+      "ciArgs": [],
+      "integrationArgs": [],
+      "env": { "COPILOT_ALLOW_ALL": "true" }
+    },
+    "claude": {
+      "$comment": "Claude Code (npm i -g @anthropic-ai/claude-code). Local runs use your login; CI adds --bare and needs ANTHROPIC_API_KEY. Tool rules use Claude Code permission syntax.",
+      "command": "claude",
+      "args": [
+        "-p", "{{prompt}}", "--permission-mode", "dontAsk", "--allowedTools", "{{allowedTools}}",
+        "--add-dir", "{{outputDir}}", "--add-dir", "{{skillRoot}}", "--output-format", "text", "--max-turns", "60"
+      ],
+      "modelArgs": ["--model", "{{model}}"],
+      "ciArgs": ["--bare"],
+      "integrationArgs": [],
+      "fileReviewTools": "Read,Grep,Glob",
+      "integrationTools": "Read,Grep,Glob,Bash(git *),Bash(pwsh *)",
+      "env": {}
+    }
+  }
+}

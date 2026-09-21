@@ -1,0 +1,54 @@
+# Review output ----------------------------------------------------------------
+# Get-PrDiff.ps1 and the driver write here on local runs. Never commit a review.
+.pr-review/
+pr-review-output/
+
+# NOTE: .claude/ and .github/agents/ are NOT ignored. They are the product of this
+# repository (the skill and the agent wrappers) and must stay tracked. Only the
+# per-machine Claude Code settings below are ignored.
+.claude/settings.local.json
+.claude/launch.json
+.copilot/
+.vscode/settings.json
+.vscode/*.local.json
+.idea/
+
+# Secrets ----------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pat
+*.token
+secrets.json
+appsettings.Development.json
+*.pfx
+*.snk
+*.p12
+
+# Node (only if you add tooling) ------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# PowerShell / .NET --------------------------------------------------------------
+bin/
+obj/
+*.ps1xml.bak
+PSScriptAnalyzerResults.*
+
+# OS and editor noise ------------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+.AppleDouble
+*.swp
+*~
+
+# Scratch -------------------------------------------------------------------------
+tmp/
+temp/
+scratch/
+*.log
