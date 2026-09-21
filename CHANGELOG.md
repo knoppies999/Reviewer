@@ -15,12 +15,11 @@ All notable changes to this project are documented here. The format follows
 
 - **Over-merging.** Two different defects on the same line and category were folded into one finding, and the second one's detail and suggestion were lost. The same-file safety net now also requires similar titles before folding, and a folded finding is kept under `duplicates` instead of being reduced to a mention.
 - **Under-merging.** The same defect reported from two files, typically a controller and the service it calls, stayed as two findings and inflated the blocking count. The integration pass now declares duplicates with `duplicateOf`, and the merge folds them into one finding that keeps both locations. The report and the inline pull request comments show "Also reported as".
-- The driver read its reference files through Windows-style paths, which would fail on the Linux agents that the pipeline template uses by default.
-
 ### Changed
 
 - Findings in `findings.json` carry a `duplicates` array, and verifications in `integration-result.json` accept `duplicateOf`. Both are additive, so `schemaVersion` stays 1.
 - A folded group takes the most severe severity, the highest confidence and the strongest verification among its members.
+- The driver builds its reference file paths with forward slashes, like the other scripts. PowerShell accepts either separator on every platform, so this changes nothing at runtime; the Linux CI run confirms the driver works there.
 
 ## [0.1.0] - 2026-09-21
 
