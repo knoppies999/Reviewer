@@ -3,6 +3,10 @@
 .pr-review/
 pr-review-output/
 
+# The driver's response cache, keyed by prompt hash. Local speed-up only; it holds
+# whole reviews of your code, so it must never be committed or published.
+.pr-review-cache/
+
 # NOTE: .claude/ and .github/agents/ are NOT ignored. They are the product of this
 # repository (the skill and the agent wrappers) and must stay tracked. Only the
 # per-machine Claude Code settings below are ignored.

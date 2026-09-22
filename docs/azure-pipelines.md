@@ -14,7 +14,7 @@ Either way, put it in a variable group so several pipelines can share it:
 
 *Pipelines → Library → + Variable group →* name it `ai-review`, add the variable, click the padlock to mark it secret, and allow the pipelines that need it.
 
-Reviews consume that account's usage. A 20-file pull request is roughly 21 model calls.
+Reviews consume that account's usage. A 20-file pull request is roughly 20 model calls: one per file, fewer when small files are batched, plus one contracts pass and one verification pass.
 
 ### 2. Permission to comment
 
@@ -77,8 +77,10 @@ Start with Optional. You get the comment on every pull request without blocking 
 | `harness` | `copilot` | `copilot` or `claude`. Selects the CLI to install, the secret to map and the command template. |
 | `runner` | `driver` | `driver` runs `Invoke-PrReview.ps1`, one CLI process per file. `agent` lets a single Copilot session orchestrate the whole skill. Prefer `driver`. |
 | `gate` | `blocking` | See [the gate](#the-gate). |
-| `model` | assistant default | Model id. Copilot ids come from `copilot help config`; Claude Code takes `sonnet`, `opus` or a full id. |
-| `maxParallel` | 4 | Concurrent per-file reviews. |
+| `model` | assistant default | Model id for every call. Copilot ids come from `copilot help config`; Claude Code takes `sonnet`, `opus` or a full id. |
+| `fileReviewModel` | `model` | Model for the per-file reviews only. |
+| `integrationModel` | `model` | Model for the contracts and verification passes only. |
+| `maxParallel` | 8 | Concurrent harness calls. |
 | `inlineComments` | `false` | Also post one inline thread per blocking finding. |
 | `baseBranch` | pull request target | Override the base branch. |
 | `cliVersion` | `latest` | npm version of `@github/copilot` or `@anthropic-ai/claude-code`. Pin it for reproducible builds. |
@@ -141,9 +143,11 @@ Treat it as a first reviewer that never gets tired, not as a replacement for a h
 
 ## Cost
 
-One model call per changed file, plus one for the integration pass. `skipPatterns` is what keeps that number honest: a repository with committed lock files and generated clients can otherwise double its call count on files nobody reads.
+One model call per changed file, plus one contracts pass and one verification pass. Files with trivial diffs share a call, so the real number is usually below the file count. `skipPatterns` is what keeps it honest: a repository with committed lock files and generated clients can otherwise double its call count on files nobody reads.
 
-To cap spend, set `maxAiCredits` for Copilot, or route per-file reviews to a cheaper model with the `model` parameter while leaving the integration pass strong.
+Each call is also cheaper than it looks. Because the prompt already contains the diff, the file and the checklists, a reviewer does not spend four or five turns opening them, and every one of those turns would have re-sent the whole conversation.
+
+To cap spend, set `maxAiCredits` for Copilot, or route per-file reviews to a cheaper model with `fileReviewModel` while `integrationModel` keeps the cross-file passes strong.
 
 ## GitHub Actions
 

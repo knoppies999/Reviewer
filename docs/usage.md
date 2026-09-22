@@ -55,7 +55,7 @@ The report is printed in chat and written to `.pr-review/`.
 /pr-review review the current branch against develop
 ```
 
-The skill runs in the main session and spawns the `pr-file-reviewer` and `pr-integration-reviewer` subagents from `.claude/agents/`. Because per-file reviews are the bulk of the cost, set `model:` in `.claude/agents/pr-file-reviewer.md` to route them to a cheaper model while the integration pass keeps the strong one:
+The skill runs in the main session and spawns the `pr-file-reviewer` and `pr-integration-reviewer` subagents from `.claude/agents/`. Because per-file reviews are the bulk of the cost, set `model:` in `.claude/agents/pr-file-reviewer.md` to route them to a cheaper model while the contracts and verification passes keep the strong one:
 
 ```yaml
 ---
@@ -91,16 +91,22 @@ copilot --agent=pr-review \
 
 ## The driver (unattended)
 
-`Invoke-PrReview.ps1` runs the entire review by launching your assistant's CLI once per file and once for the integration pass.
+`Invoke-PrReview.ps1` runs the entire review by launching your assistant's CLI per unit of work: one call per changed file (tiny ones share a call), one for the contracts pass and one for the verification pass.
 
 ```powershell
 # Claude Code, current branch against develop
 pwsh -File .claude/skills/pr-review/scripts/Invoke-PrReview.ps1 -Harness claude -Base develop
 
-# Copilot CLI, six files at a time, specific model
+# Copilot CLI, twelve calls at a time, specific model
 pwsh -File .claude/skills/pr-review/scripts/Invoke-PrReview.ps1 `
-  -Harness copilot -Base develop -MaxParallel 6 -Model claude-sonnet-5
+  -Harness copilot -Base develop -MaxParallel 12 -Model claude-sonnet-5
+
+# A fast model for the files, the strong one for the cross-file passes
+pwsh -File .claude/skills/pr-review/scripts/Invoke-PrReview.ps1 `
+  -Harness claude -Base develop -FileReviewModel claude-sonnet-5 -IntegrationModel claude-opus-5
 ```
+
+It prints a line per call as it starts and finishes, and writes `driver-run.json` next to the report with the timings, how many calls the batching saved and how many answers came from the cache. That file is the place to look when a review took longer than you expected.
 
 ### Options
 
@@ -113,11 +119,14 @@ pwsh -File .claude/skills/pr-review/scripts/Invoke-PrReview.ps1 `
 | `-RepositoryPath` | current directory | Any path inside the repository. |
 | `-OutputDir` | `.pr-review` | Where the review is written. |
 | `-ManifestPath` | | Reuse an already computed change set and skip `Get-PrDiff.ps1`. |
-| `-Model` | harness default | Model id passed to the CLI. |
-| `-MaxParallel` | 4 | Concurrent per-file reviews. |
-| `-TimeoutMinutes` | 20 | Per call. The integration pass gets double. |
+| `-Model` | harness default | Model id passed to the CLI, for every call. |
+| `-FileReviewModel` | `-Model` | Model for the per-file reviews only. |
+| `-IntegrationModel` | `-Model` | Model for the contracts and verification passes only. |
+| `-MaxParallel` | 8 | Concurrent calls. The contracts pass takes one of these slots while it runs. |
+| `-TimeoutMinutes` | 20 | Per call. The contracts and verification passes get double. |
 | `-MaxRetries` | 1 | Retries after a failed or unparsable response. |
-| `-SkipIntegration` | off | Skip the integration pass. Findings stay unverified. |
+| `-NoCache` | off | Ignore `.pr-review-cache` and write nothing to it. |
+| `-SkipIntegration` | off | Skip the contracts and verification passes. Findings stay unverified. |
 | `-ExtraArgs` | | Extra arguments appended to every CLI call. |
 | `-CI` | auto | Adds the harness's CI arguments. Inferred from `TF_BUILD` or `CI=true`. |
 | `-DryRun` | off | Write the prompts and print the exact commands. Calls nothing. |

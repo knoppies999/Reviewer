@@ -496,8 +496,13 @@ try {
             deletions     = $sumDel
         }
         config        = [ordered]@{
-            maxParallelSubagents = [int](Get-ConfigValue -Name 'maxParallelSubagents' -Default 4)
-            filesPerSubagent     = [int](Get-ConfigValue -Name 'filesPerSubagent' -Default 1)
+            maxParallelSubagents = [int](Get-ConfigValue -Name 'maxParallelSubagents' -Default 8)
+            batchSmallFiles      = [bool](Get-ConfigValue -Name 'batchSmallFiles' -Default $true)
+            smallFileDiffLines   = [int](Get-ConfigValue -Name 'smallFileDiffLines' -Default 25)
+            batchMaxFileLines    = [int](Get-ConfigValue -Name 'batchMaxFileLines' -Default 250)
+            filesPerSubagent     = [int](Get-ConfigValue -Name 'filesPerSubagent' -Default 4)
+            batchDiffLineBudget  = [int](Get-ConfigValue -Name 'batchDiffLineBudget' -Default 150)
+            concurrentContractsPass = [bool](Get-ConfigValue -Name 'concurrentContractsPass' -Default $true)
             minConfidence        = [double](Get-ConfigValue -Name 'minConfidence' -Default 0.6)
             conventions          = @(Get-ConfigValue -Name 'conventions' -Default @())
             verifyCommands       = @(Get-ConfigValue -Name 'verifyCommands' -Default @())

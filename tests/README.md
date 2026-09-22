@@ -6,17 +6,18 @@ An end-to-end test of the whole review: it builds a small C# and TypeScript repo
 pwsh -File tests/Invoke-SelfTest.ps1
 ```
 
-That is the offline run. It needs PowerShell 7 and Git, no credentials, and finishes in about 15 seconds. It runs on every push through [.github/workflows/selftest.yml](../.github/workflows/selftest.yml), on Linux and Windows.
+That is the offline run. It needs PowerShell 7 and Git, no credentials, and finishes in about 20 seconds. It runs on every push through [.github/workflows/selftest.yml](../.github/workflows/selftest.yml), on Linux and Windows.
 
 ## What it does
 
 1. **Builds the fixture.** [fixture/New-SampleRepo.ps1](fixture/New-SampleRepo.ps1) creates a git repository with a `main` branch and a `feature/refunds` branch. The feature adds a refund endpoint to a small shop and, with it, twelve planted defects across six C# and TypeScript files, plus a lock file and a generated migration that should be skipped.
 2. **Computes the change set** with `Get-PrDiff.ps1` and checks that exactly the right six files are reviewed and the right two are skipped.
-3. **Runs the review** with `Invoke-PrReview.ps1`. Offline, the harness is [fixture/Invoke-ReplayHarness.ps1](fixture/Invoke-ReplayHarness.ps1), which answers each prompt from a recorded real review in [fixture/recorded](fixture/recorded). So the driver, the JSON extraction, the finding ids, the integration prompt, the merge and the report are all the real code; only the model is replaced.
+3. **Runs the review** with `Invoke-PrReview.ps1`. Offline, the harness is [fixture/Invoke-ReplayHarness.ps1](fixture/Invoke-ReplayHarness.ps1), which answers each prompt from a recorded real review in [fixture/recorded](fixture/recorded). So the driver, the JSON extraction, the finding ids, the batching, the contracts and verification prompts, the merge and the report are all the real code; only the model is replaced.
 4. **Checks the merged result exactly**: verdict, counts, which duplicates were folded, that no finding was lost, and two regression cases described below.
 5. **Scores the findings** against [fixture/answer-key.json](fixture/answer-key.json) with [Measure-Review.ps1](Measure-Review.ps1).
 6. **Checks the gate** in `blocking`, `security` and `none` mode.
-7. **Repeats the merge and gate under Windows PowerShell 5.1** when it is available, and checks the result is identical.
+7. **Checks the work-saving behaviour**, described below.
+8. **Repeats the merge and gate under Windows PowerShell 5.1** when it is available, and checks the result is identical.
 
 The working directory is deleted when every check passes and kept when one fails, with its path printed, so you can open `review/report.md`, `review/prompts/` and `review/responses/`.
 
@@ -27,7 +28,17 @@ Both come from the first real test run of this project, and both are checked exp
 - **Over-merging.** Two different defects on the same line with the same category, a dictionary lookup that throws on unknown keys and a culture-sensitive `ToLower()`, were once folded into one finding, and the second one's detail and suggestion were lost. The test checks that both survive as separate findings.
 - **Under-merging.** The same defect reported from a controller and from the service it calls stayed as two findings, inflating the blocking count. The test checks that the three such pairs are folded, keeping both locations.
 
-Run against the merge script from before the fix, the self-test fails 11 of its 31 checks, and the scorer independently reports the lost culture finding as a miss.
+Run against the merge script from before the fix, the self-test fails 11 of its checks, and the scorer independently reports the lost culture finding as a miss.
+
+## The work-saving checks
+
+The review is fast because it makes fewer calls and fewer round trips per call, not because anyone reads less. These checks exist so that a future speed change cannot quietly become a quality change.
+
+- **Batching happened, and was not indiscriminate.** The six fixture files must collapse into fewer calls, with at least one batched call and at least one file still reviewed on its own. With the shipped thresholds that is three calls of sizes 1, 4 and 1.
+- **The prompt is self-contained.** A per-file prompt must contain the diff, the numbered file contents and both checklists, so the reviewer never has to open anything.
+- **Both whole-PR passes ran**, and a cold run served nothing from the cache.
+- **Batching changes nothing.** The fixture is reviewed a second time with `batchSmallFiles` off, one call per file, and the merged result must be identical: same verdict, same ids, same severities, same folded duplicates. This is the check that matters most. A speed setting that changes findings is a correctness bug.
+- **The cache works.** A third run, identical to the first, must answer every call from `.pr-review-cache` and produce the same result again.
 
 ## Live run
 
@@ -38,7 +49,7 @@ pwsh -File tests/Invoke-SelfTest.ps1 -Harness claude
 pwsh -File tests/Invoke-SelfTest.ps1 -Harness copilot -Model claude-sonnet-5 -KeepWorkDir
 ```
 
-This calls the model once per file and once for the integration pass, so it costs usage and takes 15 to 20 minutes. Exact counts are not checked, because a model never produces the same findings twice. It passes when:
+This calls the model per unit of work plus the two whole-PR passes, so it costs usage. Exact counts are not checked, because a model never produces the same findings twice. It passes when:
 
 - recall on the twelve planted defects is at least `-MinRecall`, 0.8 by default,
 - nothing on the must-not-report list was reported,
@@ -90,5 +101,7 @@ The recording in [fixture/recorded](fixture/recorded) is tied to the fixture's e
 1. Run a live self-test with `-KeepWorkDir`.
 2. Copy `review/file-results.jsonl` and `review/integration-result.json` from its working directory into `fixture/recorded/`.
 3. Update the exact expectations in the offline block of `Invoke-SelfTest.ps1` (counts, duplicates, the regression ids) from the new run, and check the answer key still matches.
+
+The replay harness reads the recording by prompt shape: a prompt with `File:` lines gets those files' recorded results, one object for a single file and `{ "results": [ ... ] }` for a batch; a prompt with `## Findings to verify` gets the recording's `verifications`; a prompt with `## Files in the change set` and no findings gets its `findings`, `assessment` and `verifyCommands`. A recording therefore keeps working when the batching thresholds change, but not when the fixture's line numbers do.
 
 See [fixture/recorded/README.md](fixture/recorded/README.md) for where the current recording came from.

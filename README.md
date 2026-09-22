@@ -6,8 +6,9 @@ Most AI code review is one model reading one big diff. Quality falls off a cliff
 
 1. a **script** computes the change set, so the file list, line counts and diffs are exact and cost nothing,
 2. **every changed file is reviewed in its own fresh subagent**, so no file dilutes another's context,
-3. **one integration pass** reads the whole diff for cross-file problems and **confirms or refutes** every serious finding from step 2,
-4. a **script** merges the results deterministically into a report and a machine-readable findings file.
+3. **a contracts pass** reads the whole diff for cross-file problems, running alongside step 2 rather than after it,
+4. **a verification pass** confirms or refutes every serious finding from steps 2 and 3, with evidence,
+5. a **script** merges the results deterministically into a report and a machine-readable findings file.
 
 The orchestrating agent never reads changed code itself. It reads a manifest, delegates, and collects. That is what keeps the review sharp on a 60-file pull request.
 
@@ -25,7 +26,7 @@ Copy two folders into the repository you want reviewed, then ask for a review.
 git clone https://github.com/knoppies999/Reviewer.git
 ```
 
-Copy `Reviewer/.claude/` and `Reviewer/.github/agents/` into your repository root, commit them, and add `.pr-review/` to that repository's `.gitignore`. Then, in VS Code Copilot Chat or Claude Code:
+Copy `Reviewer/.claude/` and `Reviewer/.github/agents/` into your repository root, commit them, and add `.pr-review/` and `.pr-review-cache/` to that repository's `.gitignore`. Then, in VS Code Copilot Chat or Claude Code:
 
 ```
 /pr-review review the current branch against develop
@@ -77,13 +78,16 @@ Alongside it, `findings.json` carries the same data with severity, category, con
 | Step | Who | What |
 |---|---|---|
 | 1 | `Get-PrDiff.ps1` | Resolves base and merge base, writes one diff per file, `full.diff` and `manifest.json`. Never modifies the repository. |
-| 2 | orchestrator | Reads only the manifest. Orders files by risk, builds one self-contained prompt per file. |
-| 3 | per-file subagents | One fresh context per file: reads the diff and the whole file, applies the general and language checklists, returns JSON findings with severity and confidence. |
-| 4 | integration subagent | Reads the whole diff for contract, wiring, test and completeness problems, runs any configured build or test commands, and confirms or refutes every blocking and should-fix finding. |
-| 5 | `Merge-ReviewResults.ps1` | Applies the confidence threshold and the verifications, de-duplicates, decides the verdict, writes `findings.json` and `report.md`. |
-| 6 | pipeline only | Posts the report to the pull request, publishes the artifact, applies the gate. |
+| 2 | orchestrator | Reads only the manifest. Orders files by risk, builds one self-contained prompt per unit of work. |
+| 3 | per-file subagents | One fresh context per file: the diff, the whole file and the checklists, in, JSON findings with severity and confidence, out. Files with tiny diffs share one. |
+| 4 | contracts subagent | Reads the whole diff for contract, wiring, test and completeness problems, and runs any configured build or test commands. Starts with step 3, not after it. |
+| 5 | verification subagent | Confirms or refutes every blocking and should-fix finding from steps 3 and 4, and marks the ones that are the same defect twice. |
+| 6 | `Merge-ReviewResults.ps1` | Applies the confidence threshold and the verifications, de-duplicates, decides the verdict, writes `findings.json` and `report.md`. |
+| 7 | pipeline only | Posts the report to the pull request, publishes the artifact, applies the gate. |
 
-Two ways to drive steps 2 to 4. In a chat session the assistant's own agent spawns the subagents. Unattended, `Invoke-PrReview.ps1` launches the assistant's CLI once per file and once for the integration pass, with a parallel limit, retries and timeouts. The driver does not depend on a model orchestrating anything, which is why it is the recommended path for pipelines.
+Two ways to drive steps 2 to 5. In a chat session the assistant's own agent spawns the subagents. Unattended, `Invoke-PrReview.ps1` launches the assistant's CLI per unit of work, with a parallel limit, retries and timeouts. The driver does not depend on a model orchestrating anything, which is why it is the recommended path for pipelines.
+
+**On a large pull request the wall clock is the point.** The driver pastes the diff, the file and the checklists into each prompt, so a reviewer answers on its first turn instead of opening five files one round trip at a time; files with trivial diffs share a call; the contracts pass runs alongside the file reviews instead of after them; and an identical prompt is answered from a local cache. [docs/configuration.md](docs/configuration.md#speed) covers each knob and what it costs you. None of them change what a reviewer sees, and the self-test asserts that turning batching off produces the same merged result.
 
 [docs/architecture.md](docs/architecture.md) explains the design, the data formats and why each decision was made.
 
@@ -98,7 +102,8 @@ Two ways to drive steps 2 to 4. In a chat session the assistant's own agent spaw
 │   ├── config.json                 all knobs, plus per-harness CLI command templates
 │   ├── references/
 │   │   ├── file-reviewer.md        what a per-file reviewer does
-│   │   ├── integration-reviewer.md what the integration pass does
+│   │   ├── contracts-reviewer.md   what the contracts pass does
+│   │   ├── verification-reviewer.md what the verification pass does
 │   │   ├── prompt-*.md             prompt templates with {{placeholders}}
 │   │   ├── checklist-general.md    all languages, plus the Integration section
 │   │   ├── checklist-csharp.md
@@ -143,7 +148,7 @@ docs/                               installation, usage, configuration, architec
 pwsh -File tests/Invoke-SelfTest.ps1
 ```
 
-The self-test builds a small C# and TypeScript repository with twelve planted defects, runs the real review scripts over it with a recorded model run replayed in place of the model, and checks the result against an answer key. It needs no credentials, takes about 15 seconds, and runs on every push on Linux and Windows. Add `-Harness claude` or `-Harness copilot` to measure a live model on the same fixture. [tests/README.md](tests/README.md) has the details.
+The self-test builds a small C# and TypeScript repository with twelve planted defects, runs the real review scripts over it with a recorded model run replayed in place of the model, and checks the result against an answer key. It needs no credentials, takes about 20 seconds, and runs on every push on Linux and Windows. It reviews the fixture three times: once with the defaults, once with batching off, and once against a warm cache, and requires all three to produce the same findings. Add `-Harness claude` or `-Harness copilot` to measure a live model on the same fixture. [tests/README.md](tests/README.md) has the details.
 
 ---
 
@@ -158,11 +163,11 @@ The self-test builds a small C# and TypeScript repository with twelve planted de
 
 ## Status
 
-Verified locally: all five scripts parse and run under PowerShell 7 and Windows PowerShell 5.1; the change-set script against a scratch repository in commit, working-tree and pipeline-environment modes; the driver end to end against a stand-in harness covering parallelism, retries, JSON extraction, the integration pass, merge and report; merge edge cases including malformed results, failed files and a missing integration pass; the gate in every mode including the incomplete-review path; and the pull request comment script against a mock of the Azure DevOps threads API.
+Verified locally: all five scripts parse and run under PowerShell 7 and Windows PowerShell 5.1; the change-set script against a scratch repository in commit, working-tree and pipeline-environment modes; the driver end to end against a stand-in harness covering parallelism, retries, JSON extraction, batching, caching, the contracts and verification passes, merge and report; merge edge cases including malformed results, failed files and a missing verification pass; the gate in every mode including the incomplete-review path; and the pull request comment script against a mock of the Azure DevOps threads API.
 
-One real review has been run, in Claude Code against the self-test fixture. It found all twelve planted defects and six further real ones, did not report the planted false positive, and the integration pass corrected five of the per-file reviewers' claims with evidence. That run is recorded, and the offline self-test replays it through every script on each push.
+One real review has been run, in Claude Code against the self-test fixture. It found all twelve planted defects and six further real ones, did not report the planted false positive, and the whole-PR pass corrected five of the per-file reviewers' claims with evidence. That run is recorded, and the offline self-test replays it through every script on each push.
 
-Not yet exercised against a live service: the Copilot CLI, the driver calling a signed-in Claude Code CLI, or an Azure DevOps organisation. Expect to tune models, tool permissions and prompt wording on the first pipeline runs.
+Not yet exercised against a live service: the Copilot CLI, the driver calling a signed-in Claude Code CLI, or an Azure DevOps organisation. **The speed work has not been timed against a live model** either: the replay harness answers instantly, so the self-test proves the structure and the results, not the clock. What is measured is structural — calls per review, round trips per call, and what sits on the critical path. Expect to tune models, tool permissions and prompt wording on the first pipeline runs.
 
 ## License
 

@@ -76,9 +76,9 @@ The driver exits with code 3 when every file failed, which is a strong hint that
 
 Usually a timeout on a very large file. Raise `-TimeoutMinutes`, or add the file to `skipPatterns` if it is generated. The report lists it under coverage as failed, so the result is honest either way.
 
-### The integration pass did not run
+### The contracts or verification pass did not run
 
-The report says so, and every blocking and should-fix finding is marked `unverified`. Check `responses/integration-*.txt`. The integration prompt is the largest one, so a small context window or a low `--max-turns` is a common cause.
+The report says so, and every blocking and should-fix finding is marked `unverified`. Check `responses/contracts-*.txt` and `responses/verify-*.txt`. These two prompts are the largest, so a small context window or a low `--max-turns` in the harness's `integrationArgs` is a common cause.
 
 ### The agent reviews files itself instead of spawning subagents
 
@@ -90,7 +90,19 @@ Its subagent tool is not enabled, or the worker agents are not discoverable.
 
 ### The review is slow
 
-Each file is one model call. Raise `-MaxParallel` if your account tolerates it, trim `skipPatterns`, or route per-file reviews to a faster model with `-Model`. The integration pass is one call and is not worth optimising.
+Start with `driver-run.json` in the output directory. It records the wall clock, the seconds each call took, how many calls the batching saved, how many answers came from the cache, and how long the contracts and verification passes took. That tells you which of the three things below is actually costing you.
+
+**Too many calls.** `calls` versus `filesReviewed` shows what batching saved. If they are equal, either `batchSmallFiles` is off or every file has a real diff. Trim `skipPatterns` so generated files never reach a reviewer.
+
+**Each call is slow.** Check `responses/file-*.txt` for a reviewer that went exploring. The prompt already contains the diff, the file and the checklists, so a review that used its whole turn budget is doing something it was told not to. Lower `--max-turns` in the harness's `fileArgs`, or route per-file reviews to a faster model with `-FileReviewModel`. If `inlineFileContent` is off, turn it on: opening a file is a full model round trip.
+
+**The tail.** `contractsSeconds` and `verificationSeconds` are the two single calls nothing else can overlap with. The contracts pass should already be running alongside the file reviews; if `concurrentContractsPass` is false, or `-MaxParallel` is 1, it is not. Verification has to wait by design, but it is cheaper when there are fewer findings to verify: raising `minConfidence` shortens it.
+
+Then raise `-MaxParallel` if your account tolerates the concurrency. Watch for rate limiting, which shows up as failed calls and retries in the log and costs more than the parallelism wins.
+
+### A re-run is as slow as the first one
+
+The cache is keyed on the exact prompt, so anything that changes a prompt misses: editing the file, editing the reviewer instructions or the checklists, or switching model. That is intended. It also misses when `-NoCache` is set, when `cacheResults` is false, when the entry is older than `cacheMaxAgeDays`, or when the repository root is not writable. `cacheHits` in `driver-run.json` tells you how many calls were served from it; a pipeline agent starts empty every time, so this only helps locally.
 
 ---
 
@@ -104,7 +116,7 @@ Each file is one model call. Raise `-MaxParallel` if your account tolerates it, 
 
 ### Findings that are plainly wrong
 
-Check whether the integration pass refuted them. Refuted findings are in the collapsed appendix at the bottom of the report, not in the body. If wrong findings are surviving verification, the integration pass may be running out of room: check `responses/integration-1.txt` for truncation.
+Check whether the verification pass refuted them. Refuted findings are in the collapsed appendix at the bottom of the report, not in the body. If wrong findings are surviving verification, that pass may be running out of room: check `responses/verify-1.txt` for truncation.
 
 ### Findings about code the pull request did not touch
 
@@ -112,13 +124,15 @@ They should be `severity: question`, `category: pre-existing`. If they are arriv
 
 ### The same problem is reported twice
 
-The merge folds duplicates two ways. The integration pass marks findings that describe the same defect with `duplicateOf`; that is how a controller finding and a service finding for one bug become one entry, with the second location listed under "Also reported as". Separately, findings in the same file and category are folded when their lines overlap and their titles are similar.
+The merge folds duplicates two ways. The verification pass marks findings that describe the same defect with `duplicateOf`; that is how a controller finding and a service finding for one bug become one entry, with the second location listed under "Also reported as". Separately, findings in the same file and category are folded when their lines overlap and their titles are similar.
 
-A duplicate can survive when the integration pass did not run or did not recognise the pair. That is deliberate: the merge would rather show a duplicate than fold two different defects together and lose one. Two findings on one line with different subjects, such as a lookup that throws and a culture-sensitive comparison on that same line, stay separate on purpose.
+A duplicate can survive when the verification pass did not run or did not recognise the pair. That is deliberate: the merge would rather show a duplicate than fold two different defects together and lose one. Two findings on one line with different subjects, such as a lookup that throws and a culture-sensitive comparison on that same line, stay separate on purpose.
+
+A file finding and a contracts finding about the same changed signature are the pair most likely to be duplicated, because the two passes run independently and see it from different sides. The verification pass is given both, with ids the merge will agree with, so it can fold them.
 
 ### A finding seems to have disappeared
 
-Check three places in `findings.json`: the `duplicates` array of the other findings, where a folded finding keeps its id, file, lines and title; the `refuted` array, with the integration pass's reason; and `droppedLowConfidence`, which counts findings under `minConfidence`. Nothing is removed any other way.
+Check three places in `findings.json`: the `duplicates` array of the other findings, where a folded finding keeps its id, file, lines and title; the `refuted` array, with the verification pass's reason; and `droppedLowConfidence`, which counts findings under `minConfidence`. Nothing is removed any other way.
 
 ---
 

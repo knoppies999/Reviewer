@@ -48,7 +48,7 @@ Run the same loop under `powershell` as well as `pwsh`.
 
 ## Instructions and checklists
 
-The reviewer instructions in `references/file-reviewer.md` and `references/integration-reviewer.md` are the product. Write them for a capable colleague, not a rule engine.
+The reviewer instructions in `references/file-reviewer.md`, `references/contracts-reviewer.md` and `references/verification-reviewer.md` are the product. Write them for a capable colleague, not a rule engine.
 
 **Explain why.** "Report findings with confidence at or above the threshold, because the report sorts by severity and confidence anyway" beats "ALWAYS respect minConfidence". Models follow reasons further than they follow capitals.
 

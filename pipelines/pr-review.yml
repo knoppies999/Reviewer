@@ -26,8 +26,10 @@
 #   3. The repository contains .claude/skills/pr-review/ (and, for the "agent" runner, .github/agents/).
 #
 # Runners:
-#   driver (default)  scripts/Invoke-PrReview.ps1 calls the harness CLI once per file, once for the
-#                     integration pass, and merges deterministically. Works with either harness.
+#   driver (default)  scripts/Invoke-PrReview.ps1 calls the harness CLI per unit of work (one per
+#                     changed file, with tiny ones batched, plus a contracts pass that runs
+#                     alongside them and a verification pass after), then merges deterministically.
+#                     Works with either harness.
 #   agent             the harness's own orchestrator agent runs the whole skill in one session
 #                     (Copilot only; relies on the model spawning subagents).
 #
@@ -54,10 +56,18 @@ parameters:
   displayName: 'Model id for the harness (empty = its default)'
   type: string
   default: ''
+- name: fileReviewModel
+  displayName: 'Model for the per-file reviews only (empty = the model above)'
+  type: string
+  default: ''
+- name: integrationModel
+  displayName: 'Model for the contracts and verification passes only (empty = the model above)'
+  type: string
+  default: ''
 - name: maxParallel
-  displayName: 'Parallel per-file reviews (driver runner)'
+  displayName: 'Parallel harness calls (driver runner). Hosted agents are 2 cores; the limit is usually the account, not the agent.'
   type: number
-  default: 4
+  default: 8
 - name: inlineComments
   displayName: 'Also post one inline PR thread per blocking finding'
   type: boolean
@@ -126,6 +136,8 @@ steps:
         CI           = $true
       }
       if ('${{ parameters.model }}') { $params.Model = '${{ parameters.model }}' }
+      if ('${{ parameters.fileReviewModel }}') { $params.FileReviewModel = '${{ parameters.fileReviewModel }}' }
+      if ('${{ parameters.integrationModel }}') { $params.IntegrationModel = '${{ parameters.integrationModel }}' }
       if ('${{ parameters.extraCliArgs }}') { $params.ExtraArgs = @('${{ parameters.extraCliArgs }}' -split ' ' | Where-Object { $_ }) }
       & $script @params
       exit $LASTEXITCODE

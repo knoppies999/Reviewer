@@ -37,15 +37,23 @@ The manifest gives you, per file: `path`, `oldPath`, `status`, `additions`, `del
 
 ## 2. Plan
 
-- Files with `reviewMode: review` get a subagent each (`filesPerSubagent` in the config lets you batch tiny files; default 1).
-- Order by risk so the important results land first if anything is cut short: production code before tests, larger diffs before smaller, `.cs`/`.ts` before config and docs.
-- Group into waves of `maxParallelSubagents`.
+- Order files by risk so the important results land first if anything is cut short: production code before tests, larger diffs before smaller, `.cs`/`.ts` before config and docs.
+- **Group them into units.** A file whose diff is larger than `smallFileDiffLines`, or marked `large`, is a unit on its own. Files below that share a unit, up to `filesPerSubagent` files and `batchDiffLineBudget` changed lines between them. A twenty-line change to a config file does not need a context to itself, and every unit you save is a subagent launch you do not pay for. Set `batchSmallFiles` to false in the config for strictly one file per subagent.
+- Group the units into waves of `maxParallelSubagents`, and **start the contracts subagent of step 4 in the first wave**. It only needs the diff, so it works while the files are being reviewed instead of after.
 - Write a PR summary once (2 to 4 lines from title, description and commit subjects). Every subagent prompt includes it.
 - Create `<out>/file-results.jsonl` now (empty). You append each subagent's result to it as it arrives, so nothing is lost if this conversation gets compacted.
 
 ## 3. Per-file reviews (subagents)
 
-Build each prompt from [references/prompt-file-review.md](./references/prompt-file-review.md): replace every `{{placeholder}}` from the manifest and config, and set `{{instructions}}` to the **full contents** of [references/file-reviewer.md](./references/file-reviewer.md). `{{checklists}}` is the general checklist path plus the language one when `checklist` is not `general`; `{{largeNote}}` is empty or `; LARGE diff: focus on the hunks and their surroundings`; `{{status}}` is the status, with `renamed from <oldPath>` for renames.
+Build each prompt from [references/prompt-file-review.md](./references/prompt-file-review.md), with one [references/prompt-file-section.md](./references/prompt-file-section.md) block per file in the unit. Replace every `{{placeholder}}` from the manifest and config, and set `{{instructions}}` to the **full contents** of [references/file-reviewer.md](./references/file-reviewer.md).
+
+Three placeholders decide how much the subagent has to fetch for itself. **In a chat session, keep them as pointers** — reading a diff or a source file to paste it into a prompt would pull the whole PR through your context, which is the one thing this workflow exists to avoid:
+
+- `{{diffBlock}}`: `The unified diff is at <diffFile>. Read it first.`
+- `{{contextBlock}}`: `Not included here. Read <path> from the repository root, at least the changed regions and the declarations they depend on.`
+- `{{checklistBlock}}`: `Load these from disk before you start:` and one line per checklist path (the general one, plus the language one when `checklist` is not `general`).
+
+`{{largeNote}}` is empty or `; LARGE diff: focus on the hunks and their surroundings`; `{{status}}` is the status, with `renamed from <oldPath>` for renames. (The driver script fills those three blocks with the actual text instead, because a CLI process pays a full round trip for every file it opens. That is its main speed advantage over this path.)
 
 Spawn it with your harness's mechanism, passing the filled prompt verbatim:
 
@@ -55,17 +63,31 @@ Spawn it with your harness's mechanism, passing the filled prompt verbatim:
 
 Run a wave's subagents in parallel when the environment allows it, otherwise one after another. Never skip a file because it is slow, and never review it yourself instead.
 
-When a result comes back: check that it is a single JSON object with `file` and `findings`, set `file` to the manifest path if the reviewer changed it, and append it as one line to `file-results.jsonl`. If a subagent returns no JSON, errors out, or reviewed the wrong file, retry once with the same prompt; if it fails again, append `{ "file": "<path>", "error": "<what happened>" }` and move on. Do not paraphrase findings; keep them as returned.
+When a result comes back: check that it is a single JSON object with `file` and `findings`, or `{ "results": [ … ] }` for a unit of several files. Set each `file` to the manifest path if the reviewer changed it, and append one line per file to `file-results.jsonl`. If a subagent returns no JSON, errors out, or reviewed the wrong file, retry once with the same prompt; if it fails again, append `{ "file": "<path>", "error": "<what happened>" }` for each file it was given and move on. Do not paraphrase findings; keep them as returned.
 
-## 4. Integration and verification (one subagent)
+## 4. Contracts pass (one subagent, started early)
 
-After all waves, assign ids to the per-file findings with the fixed rule from [references/report-format.md](./references/report-format.md): walk the manifest files in order, and each file's findings in order, numbering `F1`, `F2`, … Collect every finding with severity `blocking` or `should-fix` as `{ id, file, line, severity, category, title, detail }`.
+This is the half of the whole-PR review that needs only the change set: contracts, wiring, tests, consistency, completeness, deleted and renamed files. Start it **in the first wave**, not at the end.
 
-Build the prompt from [references/prompt-integration.md](./references/prompt-integration.md) with `{{instructions}}` set to the full contents of [references/integration-reviewer.md](./references/integration-reviewer.md), `{{fileList}}` as one line per manifest file (status, +/-, and whether it was reviewed, skipped with reason, deleted, or failed), `{{summaries}}` and `{{notes}}` from the results, `{{findingsToVerify}}` as the JSON array, and `{{verifyCommands}}` from the config (or `none`). Spawn the **`pr-integration-reviewer`** agent the same way as above (Claude Code: `subagent_type: pr-integration-reviewer`).
+Build the prompt from [references/prompt-contracts.md](./references/prompt-contracts.md) with `{{instructions}}` set to the full contents of [references/contracts-reviewer.md](./references/contracts-reviewer.md), `{{fileList}}` as one line per manifest file (status, +/-, and whether it will be reviewed, skipped with reason, or deleted), and `{{verifyCommands}}` from the config (or `none`). Spawn the **`pr-integration-reviewer`** agent the same way as above (Claude Code: `subagent_type: pr-integration-reviewer`).
 
-Save the returned JSON object verbatim to `<out>/integration-result.json`. If the pass fails twice, do not create the file; the merge marks everything unverified and says so.
+Keep the returned `findings`, `assessment` and `verifyCommands`.
 
-## 5. Merge (the script does this, not you)
+## 5. Verification pass (one subagent, last)
+
+Once every file review and the contracts pass are in, assign ids with the fixed rule from [references/report-format.md](./references/report-format.md): walk the manifest files in order, and each file's findings in order, numbering `F1`, `F2`, …, then continue the numbering through the contracts findings. Collect every finding with severity `blocking` or `should-fix` as `{ id, file, line, severity, category, title, detail, source }`.
+
+Build the prompt from [references/prompt-verify.md](./references/prompt-verify.md) with `{{instructions}}` set to the full contents of [references/verification-reviewer.md](./references/verification-reviewer.md), `{{summaries}}` and `{{notes}}` from the per-file results, `{{assessment}}` from the contracts pass, and `{{findingsToVerify}}` as the JSON array. Spawn the `pr-integration-reviewer` agent again.
+
+Write `<out>/integration-result.json` with the two passes combined:
+
+```json
+{ "verifications": [ … from this pass … ], "findings": [ … ], "assessment": "…", "verifyCommands": [ … ] }
+```
+
+If a pass fails twice, leave its part empty; the merge marks the affected findings unverified and says so.
+
+## 6. Merge (the script does this, not you)
 
 Run [scripts/Merge-ReviewResults.ps1](./scripts/Merge-ReviewResults.ps1):
 
@@ -75,7 +97,7 @@ pwsh -NoProfile -File "<skillRoot>/scripts/Merge-ReviewResults.ps1" -OutputDir "
 
 It applies the confidence threshold and the verifications, merges duplicates, decides the verdict, and writes `findings.json` and `report.md`. If it reports a problem, fix the input (usually a malformed line in `file-results.jsonl`) and run it again. Do not hand-write `findings.json` or `report.md` while the script can run.
 
-## 6. Deliver
+## 7. Deliver
 
 - **Local**: print `report.md` verbatim in the chat, then the two file paths. Mention [scripts/Publish-AdoPrComment.ps1](./scripts/Publish-AdoPrComment.ps1) only if the user asks about posting to the PR.
 - **Pipeline**: your final message is the verdict line, the counts, and the two file paths. The pipeline posts the comment, publishes the artifact and applies the gate with [scripts/Test-ReviewGate.ps1](./scripts/Test-ReviewGate.ps1).
@@ -98,11 +120,20 @@ All knobs live in [config.json](./config.json):
 |---|---|---|
 | `baseBranchCandidates` | Base branches tried in order when none is given | `develop`, `main`, `master` |
 | `reportDirName` | Output directory under the repo root for local runs | `.pr-review` |
-| `maxParallelSubagents` | Subagents per wave (and the driver's parallelism) | 4 |
-| `filesPerSubagent` | Files per per-file subagent (1 = one file each) | 1 |
+| `maxParallelSubagents` | Subagents per wave (and the driver's parallelism) | 8 |
 | `maxDiffLinesPerFile` | Above this the file is marked `large` (still reviewed) | 1500 |
 | `minConfidence` | Findings below this are dropped by the merge | 0.6 |
 | `reviewDeletedFiles` | Give deleted files their own subagent | false |
+| `batchSmallFiles` | Let files with tiny diffs share a subagent | true |
+| `smallFileDiffLines` | A file at or below this many changed lines may be batched | 25 |
+| `batchMaxFileLines` | …and only when the whole file is at most this long | 250 |
+| `filesPerSubagent` | Most files in one batched subagent | 4 |
+| `batchDiffLineBudget` | Most changed lines in one batched subagent | 150 |
+| `concurrentContractsPass` | Run the contracts pass alongside the file reviews | true |
+| `inlineDiff` / `inlineFileContent` / `inlineChecklists` | Driver only: put the diff, the file and the checklists in the prompt instead of making the reviewer open them | true |
+| `inlineFileContentMaxLines` | Longest file the driver will inline; above it the reviewer reads the file itself | 1200 |
+| `cacheResults` / `cacheDirName` / `cacheMaxAgeDays` | Driver only: reuse an identical prompt's previous answer | true / `.pr-review-cache` / 30 |
+| `fileReviewModel` / `integrationModel` | Driver only: model per stage, overriding `-Model` | harness default |
 | `gate` | Pipeline gate: `blocking`, `security` or `none` | `blocking` |
 | `failOnMissingReport` | Gate fails when no `findings.json` was produced | true |
 | `failOnIncomplete` | Gate fails when any reviewable file could not be reviewed | true |
@@ -116,7 +147,7 @@ All knobs live in [config.json](./config.json):
 ## Adjusting the review
 
 - Per-file review behaviour: [references/file-reviewer.md](./references/file-reviewer.md). Models and tool limits per harness: `.github/agents/pr-file-reviewer.agent.md`, `.claude/agents/pr-file-reviewer.md`, and the `harnesses` entries.
-- Integration and verification pass: [references/integration-reviewer.md](./references/integration-reviewer.md) and the matching agent wrappers.
-- Prompt shape: `references/prompt-file-review.md` and `references/prompt-integration.md`.
+- Contracts pass: [references/contracts-reviewer.md](./references/contracts-reviewer.md). Verification pass: [references/verification-reviewer.md](./references/verification-reviewer.md). Both use the `pr-integration-reviewer` wrappers.
+- Prompt shape: `references/prompt-file-review.md`, `references/prompt-file-section.md`, `references/prompt-contracts.md` and `references/prompt-verify.md`.
 - Language checklists: `references/checklist-*.md`. Add a language by adding a file and mapping its extensions in `config.json`.
 - Severity, categories and confidence: [references/severity-guide.md](./references/severity-guide.md).

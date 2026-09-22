@@ -4,11 +4,25 @@
   "baseBranchCandidates": ["develop", "main", "master"],
   "reportDirName": ".pr-review",
 
-  "maxParallelSubagents": 4,
-  "filesPerSubagent": 1,
+  "maxParallelSubagents": 8,
   "maxDiffLinesPerFile": 1500,
   "minConfidence": 0.6,
   "reviewDeletedFiles": false,
+
+  "$speedComment": "Speed knobs. Everything a reviewer needs is written into its prompt file, so a review is one tool call plus the answer instead of five or six round trips. Small files share a subagent; substantial ones never do. The contracts half of the integration pass needs only the diff, so it runs while the files are still being reviewed.",
+  "inlineDiff": true,
+  "inlineFileContent": true,
+  "inlineFileContentMaxLines": 1200,
+  "inlineChecklists": true,
+  "batchSmallFiles": true,
+  "smallFileDiffLines": 25,
+  "batchMaxFileLines": 250,
+  "filesPerSubagent": 4,
+  "batchDiffLineBudget": 150,
+  "concurrentContractsPass": true,
+  "cacheResults": true,
+  "cacheDirName": ".pr-review-cache",
+  "cacheMaxAgeDays": 30,
 
   "gate": "blocking",
   "failOnMissingReport": true,
@@ -24,7 +38,8 @@
     "**/*.min.js", "**/*.min.css", "**/*.map", "**/*.snap",
     "**/*.designer.cs", "**/*.Designer.cs", "**/*.g.cs", "**/*.g.i.cs", "**/*.generated.*",
     "**/Migrations/*.Designer.cs", "**/*ModelSnapshot.cs",
-    "**/obj/**", "**/bin/**", "**/dist/**", "**/build/**", "**/node_modules/**", "**/.pr-review/**",
+    "**/obj/**", "**/bin/**", "**/dist/**", "**/build/**", "**/node_modules/**",
+    "**/.pr-review/**", "**/.pr-review-cache/**",
     "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.gif", "**/*.ico", "**/*.svg", "**/*.pdf",
     "**/*.woff", "**/*.woff2", "**/*.ttf", "**/*.eot",
     "**/*.dll", "**/*.exe", "**/*.pdb", "**/*.zip", "**/*.nupkg", "**/*.snk", "**/*.pfx"
@@ -50,21 +65,24 @@
       ],
       "modelArgs": ["--model={{model}}"],
       "ciArgs": [],
+      "fileArgs": [],
       "integrationArgs": [],
       "env": { "COPILOT_ALLOW_ALL": "true" }
     },
     "claude": {
-      "$comment": "Claude Code (npm i -g @anthropic-ai/claude-code). Local runs use your login; CI adds --bare and needs ANTHROPIC_API_KEY. Tool rules use Claude Code permission syntax.",
+      "$comment": "Claude Code (npm i -g @anthropic-ai/claude-code). Local runs use your login; CI adds --bare and needs ANTHROPIC_API_KEY. Tool rules use Claude Code permission syntax. A file review is capped at a few turns because its prompt already contains the diff, the file and the checklists.",
       "command": "claude",
       "args": [
         "-p", "{{prompt}}", "--permission-mode", "dontAsk", "--allowedTools", "{{allowedTools}}",
-        "--add-dir", "{{outputDir}}", "--add-dir", "{{skillRoot}}", "--output-format", "text", "--max-turns", "60"
+        "--add-dir", "{{outputDir}}", "--add-dir", "{{skillRoot}}", "--output-format", "text"
       ],
       "modelArgs": ["--model", "{{model}}"],
       "ciArgs": ["--bare"],
-      "integrationArgs": [],
+      "fileArgs": ["--max-turns", "10"],
+      "integrationArgs": ["--max-turns", "60"],
       "fileReviewTools": "Read,Grep,Glob",
-      "integrationTools": "Read,Grep,Glob,Bash(git *),Bash(pwsh *)",
+      "contractsTools": "Read,Grep,Glob,Bash(git *),Bash(pwsh *)",
+      "verifyTools": "Read,Grep,Glob",
       "env": {}
     }
   }

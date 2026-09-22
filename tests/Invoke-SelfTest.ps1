@@ -208,7 +208,70 @@ try {
         Assert-Check 'gate security fails on the unverified ownership finding (exit 1)' ($g.ExitCode -eq 1) "exit $($g.ExitCode)"
     }
 
-    # ------------------------------------------------------------ 7. Windows PowerShell 5.1
+    # ------------------------------------------------------------ 7. speed behaviour
+    Write-Step 'Check the work-saving behaviour'
+    $run = Get-Content -LiteralPath (Join-Path $out 'driver-run.json') -Raw | ConvertFrom-Json -Depth 20
+    $unitSizes = @($run.units | ForEach-Object { @($_.files).Count })
+    Assert-Check 'small files were batched, larger ones were not' ((@($unitSizes | Where-Object { $_ -gt 1 }).Count -ge 1) -and (@($unitSizes | Where-Object { $_ -eq 1 }).Count -ge 1)) "$($run.calls) call(s) for $($run.filesReviewed) files: sizes $($unitSizes -join ',')"
+    Assert-Check 'batching saved at least one call' ($run.calls -lt $run.filesReviewed) "$($run.calls) < $($run.filesReviewed)"
+    Assert-Check 'the file contents were inlined into the prompts' ($run.inlinedFileContents -eq $run.filesReviewed) "$($run.inlinedFileContents) of $($run.filesReviewed)"
+    Assert-Check 'the contracts and verification passes both ran' (([bool]$run.contractsPassRan) -and ([bool]$run.verificationPassRan))
+    Assert-Check 'a cold run hits the cache for nothing' ($run.cacheHits -eq 0) "$($run.cacheHits)"
+
+    # A prompt carries the diff, the file and the checklists, so a reviewer should not need to open them.
+    $filePrompt = Get-Content -LiteralPath (Get-ChildItem (Join-Path $out 'prompts') -Filter 'file-*.md' | Select-Object -First 1).FullName -Raw
+    Assert-Check 'a file prompt contains the diff, the numbered file and both checklists' (
+        ($filePrompt -match '(?m)^#### Diff') -and ($filePrompt -match '(?m)^#### Current file') -and
+        ($filePrompt -match 'The whole file after the change, with line numbers') -and
+        ($filePrompt -match 'checklist-general\.md') -and ($filePrompt -match 'checklist-(csharp|typescript)\.md')
+    ) "$([math]::Round($filePrompt.Length / 1024.0, 1)) KB"
+
+    function Get-Canonical {
+        # Everything about a merged result except when it was generated.
+        param([string]$Path)
+        $d = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -Depth 30
+        $rows = @($d.findings | ForEach-Object {
+                $dups = (@($_.duplicates | ForEach-Object { $_.id }) -join '+')
+                "$($_.id)|$($_.file)|$($_.line)|$($_.severity)|$($_.confidence)|$($_.verification)|$dups|$($_.title)"
+            })
+        return "$($d.verdict)|$($d.mergedDuplicates)|$($d.counts.blocking)/$($d.counts.'should-fix')/$($d.counts.nit)/$($d.counts.question)|" + ($rows -join "`n")
+    }
+
+    if (-not $live) {
+        # Batching must not change the answer: the same recording, reviewed one file per call.
+        Write-Step 'Repeat the review with batching off'
+        $noBatchConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -Depth 20
+        $noBatchConfig | Add-Member -Force -NotePropertyName 'batchSmallFiles' -NotePropertyValue $false
+        $noBatchPath = Join-Path $WorkDir 'config-replay-nobatch.json'
+        [System.IO.File]::WriteAllText($noBatchPath, ($noBatchConfig | ConvertTo-Json -Depth 20), [System.Text.UTF8Encoding]::new($false))
+        $outNoBatch = Join-Path $WorkDir 'review-nobatch'
+        New-Item -ItemType Directory -Force -Path $outNoBatch | Out-Null
+        Copy-Item -LiteralPath $manifestPath -Destination $outNoBatch
+        $manifestNoBatch = Join-Path $outNoBatch 'manifest.json'
+        # The manifest names its own output directory; point the copy at the new one.
+        $mjson = Get-Content -LiteralPath $manifestNoBatch -Raw | ConvertFrom-Json -Depth 20
+        $mjson.outputDir = $outNoBatch
+        [System.IO.File]::WriteAllText($manifestNoBatch, ($mjson | ConvertTo-Json -Depth 20), [System.Text.UTF8Encoding]::new($false))
+        Copy-Item -LiteralPath (Join-Path $out 'full.diff') -Destination $outNoBatch -ErrorAction SilentlyContinue
+        Copy-Item -LiteralPath (Join-Path $out 'diffs') -Destination $outNoBatch -Recurse -ErrorAction SilentlyContinue
+
+        $r = Invoke-Script -Path $driver -Arguments @('-Harness', 'replay', '-ConfigPath', $noBatchPath, '-ManifestPath', $manifestNoBatch, '-MaxParallel', "$MaxParallel", '-CI', '-NoCache')
+        Assert-Check 'the unbatched review also exits 0' ($r.ExitCode -eq 0)
+        if ($r.ExitCode -ne 0) { Write-Host ($r.Output -join "`n") }
+        $runNoBatch = Get-Content -LiteralPath (Join-Path $outNoBatch 'driver-run.json') -Raw | ConvertFrom-Json -Depth 20
+        Assert-Check 'batching off gives one call per file' ($runNoBatch.calls -eq $runNoBatch.filesReviewed) "$($runNoBatch.calls) call(s)"
+        Assert-Check 'batching does not change the merged result' ((Get-Canonical (Join-Path $outNoBatch 'findings.json')) -eq (Get-Canonical $findingsPath))
+
+        # The cache: an identical review a second time should call the harness for nothing.
+        Write-Step 'Repeat the review with a warm cache'
+        $r = Invoke-Script -Path $driver -Arguments $driverArgs
+        Assert-Check 'the cached review exits 0' ($r.ExitCode -eq 0)
+        $runCached = Get-Content -LiteralPath (Join-Path $out 'driver-run.json') -Raw | ConvertFrom-Json -Depth 20
+        Assert-Check 'every call came from the cache' ($runCached.cacheHits -eq ($runCached.calls + 2)) "$($runCached.cacheHits) hit(s) for $($runCached.calls) file call(s) plus 2 passes"
+        Assert-Check 'the cached review gives the same result' ((Get-Canonical $findingsPath) -eq (Get-Canonical (Join-Path $outNoBatch 'findings.json')))
+    }
+
+    # ------------------------------------------------------------ 8. Windows PowerShell 5.1
     $winPs = if ($IsWindows) { (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source } else { $null }
     if ($winPs) {
         Write-Step 'Repeat the merge and gate under Windows PowerShell 5.1'
